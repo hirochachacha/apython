@@ -62,6 +62,10 @@ except (ImportError, AttributeError):
     has_abc = False
 
 
+if py3:
+    basestring = str
+
+
 class Interpreter(code.InteractiveInterpreter):
 
     def __init__(self, locals=None, encoding=None):
@@ -396,6 +400,8 @@ class Repl(object):
         # attribute
         self.closed = False
 
+        self.interp.locals['_'] = self
+
         pythonhist = os.path.expanduser(self.config.hist_file)
         if os.path.exists(pythonhist):
             self.rl_history.load(pythonhist,
@@ -406,13 +412,22 @@ class Repl(object):
         Execute PYTHONSTARTUP file if it exits. Call this after front
         end-specific initialisation.
         """
-        filename = os.environ.get('PYTHONSTARTUP')
-        if filename and os.path.isfile(filename):
-            with open(filename, 'r') as f:
-                if py3:
-                    self.interp.runsource(f.read(), filename, 'exec')
-                else:
-                    self.interp.runsource(f.read(), filename, 'exec', encode=False)
+        startup = os.environ.get('PYTHONSTARTUP')
+        default_rc = os.path.join(os.path.dirname(__file__), "default", "rc.py")
+        rc = os.path.expanduser('~/.bpython/rc.py')
+        for filename in [startup, default_rc, rc]:
+            if filename and os.path.isfile(filename):
+                with open(filename, 'r') as f:
+                    if py3:
+                        self.interp.runsource(f.read(), filename, 'exec')
+                    else:
+                        self.interp.runsource(f.read(), filename, 'exec', encode=False)
+
+    def current_line(self):
+        raise(NotImplementedError("current_line should be implemented in subclass"))
+
+    def getstdout(self):
+        raise(NotImplementedError("getstdout should be implemented in subclass"))
 
     def current_string(self, concatenate=False):
         """If the line ends in a string get it, otherwise return ''"""

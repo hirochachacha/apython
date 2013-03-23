@@ -1,0 +1,31 @@
+[general]
+arg_spec = True
+auto_display_list = True
+color_scheme = default
+complete_magic_methods = True
+magic_methods = init, repr, str, lt, le, eq, ne, gt, ge, cmp, hash, nonzero, unicode, getattr, setattr, get, set,call, len, getitem, setitem, iter, reversed, contains, add, sub, mul, floordiv, mod, divmod, pow, lshift, rshift, and, xor, or, div, truediv, neg, pos, abs, invert, complex, int, float, oct, hex, index, coerce, enter, exit
+autocomplete_mode = simple
+dedent_after = 1
+flush_output = True
+highlight_show_source = True
+hist_file = ~/.pythonhist
+hist_length = 100
+hist_duplicates = True
+paste_time = 0.02
+syntax = True
+tab_length = 4
+pastebin_confirm = True
+pastebin_private = False
+pastebin_url = http://bpaste.net/xmlrpc/
+pastebin_private = True
+pastebin_show_url = http://bpaste.net/show/$paste_id/
+pastebin_helper =
+save_append_py = False
+
+[cli]
+suggestion_width = 0.8
+trim_prompts = False
+
+[gtk]
+font = monospace 10
+color_scheme = default

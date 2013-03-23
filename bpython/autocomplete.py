@@ -49,7 +49,10 @@ class Autocomplete(rlcompleter.Completer):
         rlcompleter.Completer.__init__(self, namespace)
         self.locals = namespace
         if hasattr(config, 'autocomplete_mode'):
-            self.autocomplete_mode = config.autocomplete_mode
+            if config.autocomplete_mode in ['simple', 'fuzzy', 'substring']:
+                self.autocomplete_mode = config.autocomplete_mode
+            else:
+                raise
         else:
             self.autocomplete_mode = SUBSTRING
 

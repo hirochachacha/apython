@@ -62,9 +62,8 @@ from types import ModuleType
 
 # These are used for syntax highlighting
 from pygments import format
-from pygments.formatters import TerminalFormatter
-from pygments.lexers import PythonLexer
 from pygments.token import Token
+from bpython.formatter import BPythonFormatter
 from bpython.formatter import BPythonFormatter
 
 # This for completion
@@ -73,16 +72,12 @@ from bpython import importcompletion
 # This for config
 from bpython.config import Struct
 
-# This for keys
-from bpython.keys import cli_key_dispatch as key_dispatch
-
 # This for i18n
 from bpython import translations
 from bpython.translations import _
 
 from bpython import repl
 from bpython._py3compat import py3
-from bpython.pager import page
 from bpython import autocomplete
 import bpython.args
 
@@ -314,6 +309,8 @@ class CLIInteraction(repl.Interaction):
 class CLIRepl(repl.Repl):
 
     def __init__(self, scr, interp, statusbar, config, idle=None):
+        from bpython.key.dispatcher import Dispatcher
+
         repl.Repl.__init__(self, interp, config)
         self.interp.writetb = self.writetb
         self.scr = scr
@@ -331,6 +328,8 @@ class CLIRepl(repl.Repl):
         self.statusbar = statusbar
         self.formatter = BPythonFormatter(config.color_scheme)
         self.interact = CLIInteraction(self.config, statusbar=self.statusbar)
+
+        self.key_dispatcher = Dispatcher(self)
 
         if config.cli_suggestion_width <= 0 or config.cli_suggestion_width > 1:
             config.cli_suggestion_width = 0.8
@@ -838,183 +837,7 @@ class CLIRepl(repl.Repl):
         return True
 
     def p_key(self, key):
-        """Process a keypress"""
-
-        if key is None:
-            return ''
-
-        config = self.config
-
-        if platform.system() == 'Windows':
-            C_BACK = chr(127)
-            BACKSP = chr(8)
-        else:
-            C_BACK = chr(8)
-            BACKSP = chr(127)
-
-        if key == C_BACK:  # C-Backspace (on my computer anyway!)
-            self.clrtobol()
-            key = '\n'
-            # Don't return; let it get handled
-
-        if key == chr(27): #Escape Key
-            return ''
-
-        if key in (BACKSP, 'KEY_BACKSPACE'):
-            self.bs()
-            self.complete()
-            return ''
-
-        elif key in key_dispatch[config.delete_key] and not self.s:
-            # Delete on empty line exits
-            self.do_exit = True
-            return None
-
-        elif key in ('KEY_DC', ) + key_dispatch[config.delete_key]:
-            self.delete()
-            self.complete()
-            # Redraw (as there might have been highlighted parens)
-            self.print_line(self.s)
-            return ''
-
-        elif key in key_dispatch[config.undo_key]:  # C-r
-            self.undo()
-            return ''
-
-        elif key in key_dispatch[config.search_key]:
-            self.search()
-            return ''
-
-        elif key in ('KEY_UP', ) + key_dispatch[config.up_one_line_key]:
-            # Cursor Up/C-p
-            self.back()
-            return ''
-
-        elif key in ('KEY_DOWN', ) + key_dispatch[config.down_one_line_key]:
-            # Cursor Down/C-n
-            self.fwd()
-            return ''
-
-        elif key in ("KEY_LEFT",' ^B', chr(2)):  # Cursor Left or ^B
-            self.mvc(1)
-            # Redraw (as there might have been highlighted parens)
-            self.print_line(self.s)
-
-        elif key in ("KEY_RIGHT", '^F', chr(6)):  # Cursor Right or ^F
-            self.mvc(-1)
-            # Redraw (as there might have been highlighted parens)
-            self.print_line(self.s)
-
-        elif key in ("KEY_HOME", '^A', chr(1)):  # home or ^A
-            self.home()
-            # Redraw (as there might have been highlighted parens)
-            self.print_line(self.s)
-
-        elif key in ("KEY_END", '^E', chr(5)):  # end or ^E
-            self.end()
-            # Redraw (as there might have been highlighted parens)
-            self.print_line(self.s)
-
-        elif key in ("KEY_NPAGE", '\T'): # page_down or \T
-            self.hend()
-            self.print_line(self.s)
-
-        elif key in ("KEY_PPAGE", '\S'): # page_up or \S
-            self.hbegin()
-            self.print_line(self.s)
-
-        elif key in key_dispatch[config.cut_to_buffer_key]:  # cut to buffer
-            self.cut_to_buffer()
-            return ''
-
-        elif key in key_dispatch[config.yank_from_buffer_key]:
-            # yank from buffer
-            self.yank_from_buffer()
-            return ''
-
-        elif key in key_dispatch[config.clear_word_key]:
-            self.cut_buffer = self.bs_word()
-            self.complete()
-            return ''
-
-        elif key in key_dispatch[config.clear_line_key]:
-            self.clrtobol()
-            return ''
-
-        elif key in key_dispatch[config.clear_screen_key]:
-            self.s_hist = [self.s_hist[-1]]
-            self.highlighted_paren = None
-            self.redraw()
-            return ''
-
-        elif key in key_dispatch[config.exit_key]:
-            if not self.s:
-                self.do_exit = True
-                return None
-            else:
-                return ''
-
-        elif key in key_dispatch[config.save_key]:
-            self.write2file()
-            return ''
-
-        elif key in key_dispatch[config.pastebin_key]:
-            self.pastebin()
-            return ''
-
-        elif key in key_dispatch[config.last_output_key]:
-            page(self.stdout_hist[self.prev_block_finished:-4])
-            return ''
-
-        elif key in key_dispatch[config.show_source_key]:
-            source = self.get_source_of_current_name()
-            if source is not None:
-                if config.highlight_show_source:
-                    source = format(PythonLexer().get_tokens(source),
-                                    TerminalFormatter())
-                page(source)
-            else:
-                self.statusbar.message(_('Cannot show source.'))
-            return ''
-
-        elif key in ('\n', '\r', 'PADENTER'):
-            self.lf()
-            return None
-
-        elif key == '\t':
-            return self.tab()
-
-        elif key == 'KEY_BTAB':
-            return self.tab(back=True)
-
-        elif key in key_dispatch[config.suspend_key]:
-            if platform.system() != 'Windows':
-                self.suspend()
-                return ''
-            else:
-                self.do_exit = True
-                return None
-
-        elif key[0:3] == 'PAD' and not key in ('PAD0', 'PADSTOP'):
-            pad_keys = {
-                'PADMINUS': '-',
-                'PADPLUS': '+',
-                'PADSLASH': '/',
-                'PADSTAR': '*',
-            }
-            try:
-                self.addstr(pad_keys[key])
-                self.print_line(self.s)
-            except KeyError:
-                return ''
-        elif len(key) == 1 and not unicodedata.category(key) == 'Cc':
-            self.addstr(key)
-            self.print_line(self.s)
-
-        else:
-            return ''
-
-        return True
+        return self.key_dispatcher.run(key)
 
     def print_line(self, s, clr=False, newline=False):
         """Chuck a line of text through the highlighter, move the cursor
@@ -1403,7 +1226,7 @@ class CLIRepl(repl.Repl):
             os.kill(os.getpid(), signal.SIGSTOP)
 
     def tab(self, back=False):
-        """Process the tab key being hit. 
+        """Process the tab key being hit.
 
         If there's only whitespace
         in the line or the line is blank then process a normal tab,
@@ -1674,11 +1497,9 @@ def init_wins(scr, config):
     # problems that needed dirty hackery to fix. :)
 
     statusbar = Statusbar(scr, main_win, background, config,
-        _(" <%s> Rewind  <%s> Save  <%s> Pastebin "
-          " <%s> Pager  <%s> Show Source ") %
-          (config.undo_key, config.save_key, config.pastebin_key,
-           config.last_output_key, config.show_source_key),
-            get_colpair(config, 'main'))
+        _(" <C-r> Rewind  <C-s> Save  <F8> Pastebin <F9> Pager  <F2> Show Source "),
+        get_colpair(config, 'main')
+    )
 
     return main_win, statusbar
 

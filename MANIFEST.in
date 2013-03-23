@@ -2,14 +2,11 @@ include .pycheckrc
 include AUTHORS
 include CHANGELOG
 include LICENSE
-include data/bpython
-include data/bpython-gtk
-include data/bpython.desktop
+include data/apython
+include data/apython.desktop
 include doc/sphinx/source/conf.py
 include doc/sphinx/source/*.rst
 include doc/sphinx/source/logo.png
-include sample-config
-include *.theme
 include bpython/logo.png
 include ROADMAP
 include TODO

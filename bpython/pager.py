@@ -28,6 +28,13 @@ import pydoc
 import subprocess
 import sys
 
+import pygments
+from pygments.formatters import TerminalFormatter
+from pygments.lexers import PythonLexer
+
+
+__all__ = ['page']
+
 
 def get_pager_command():
     command = os.environ.get('PAGER', 'less -r').split()
@@ -42,8 +49,10 @@ def page_internal(data):
         sys.stdout.write(data)
 
 
-def page(data, use_internal=False):
+def page(data, use_internal=False, use_hilight=False):
     command = get_pager_command()
+    if use_hilight:
+        data = pygments.format(PythonLexer().get_tokens(data), TerminalFormatter())
     if not command or use_internal:
         page_internal(data)
     else:

@@ -114,7 +114,7 @@ else:
 
 data_files = [
     # desktop shortcut
-    (os.path.join('share', 'applications'), ['data/bpython.desktop'])
+    (os.path.join('share', 'applications'), ['data/apython.desktop'])
 ]
 data_files.extend(man_pages)
 
@@ -148,16 +148,10 @@ setup(
     },
     entry_points = {
         'console_scripts': [
-            'bpython = bpython.cli:main',
-            'bpython-urwid = bpython.urwid:main',
+            'apython = bpython.cli:main',
         ],
-        'gui_scripts': [
-            'bpython-gtk = bpython.gtk_:main'
-         ]
     },
-    scripts = ([] if using_setuptools else ['data/bpython',
-                                            'data/bpython-gtk',
-                                            'data/bpython-urwid']),
+    scripts = ([] if using_setuptools else ['data/apython']),
     cmdclass = cmdclass,
     test_suite = 'bpython.test'
 )
