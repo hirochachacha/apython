@@ -400,8 +400,6 @@ class Repl(object):
         # attribute
         self.closed = False
 
-        self.interp.locals['_'] = self
-
         pythonhist = os.path.expanduser(self.config.hist_file)
         if os.path.exists(pythonhist):
             self.rl_history.load(pythonhist,
@@ -413,8 +411,18 @@ class Repl(object):
         end-specific initialisation.
         """
         startup = os.environ.get('PYTHONSTARTUP')
-        default_rc = os.path.join(os.path.dirname(__file__), "default", "rc.py")
-        rc = os.path.expanduser('~/.bpython/rc.py')
+        default_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "default"))
+        default_rc = os.path.join(default_dir, "rc.py")
+        config_dir = os.path.expanduser('~/.bpython')
+        rc = os.path.join(config_dir, 'rc.py')
+
+        if py3:
+            self.interp.runsource("import sys; sys.path.append('%s')" % default_dir, default_dir, 'exec')
+            self.interp.runsource("sys.path.append('%s'); del sys" % config_dir, config_dir, 'exec')
+        else:
+            self.interp.runsource("import sys; sys.path.append('%s')" % default_dir, default_dir, 'exec', encode=False)
+            self.interp.runsource("sys.path.append('%s'); del sys" % config_dir, config_dir, 'exec', encode=False)
+
         for filename in [startup, default_rc, rc]:
             if filename and os.path.isfile(filename):
                 with open(filename, 'r') as f:
@@ -535,8 +543,8 @@ class Repl(object):
             return True
         return False
 
-    def get_source_of_current_name(self):
-        """Return the source code of the object which is bound to the
+    def get_current_object(self):
+        """Return the object which is bound to the
         current name in the current input line. Return `None` if the
         source cannot be found."""
         try:
@@ -545,11 +553,10 @@ class Repl(object):
                 line = self.current_line()
                 if inspection.is_eval_safe_name(line):
                     obj = self.get_object(line)
-            source = inspect.getsource(obj)
         except (AttributeError, IOError, NameError, TypeError):
             return None
         else:
-            return source
+            return obj
 
     def complete(self, tab=False):
         """Construct a full list of possible completions and construct and

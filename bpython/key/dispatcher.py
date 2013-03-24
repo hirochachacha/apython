@@ -2,8 +2,6 @@
 #coding: utf-8
 
 from bpython.key.dispatch_table import (dispatch_table, CannotFindHandler)
-from bpython.pager import page
-from bpython.translations import _
 
 import unicodedata
 import platform
@@ -13,12 +11,17 @@ class Dispatcher(object):
     def __init__(self, repl):
         self.repl = repl
         self.meta = False
+        self.raw = False
 
     def run(self, key):
         if self.meta:
             if len(key) == 1 and not unicodedata.category(key) == 'Cc':
                 key = "M-%s" % key
             self.meta = False
+
+        if self.raw:
+            self.raw = False
+            return self.do_normal(key)
 
         try:
             handler = dispatch_table.get_handler_on(key)
@@ -37,6 +40,14 @@ class Dispatcher(object):
     @dispatch_table.set_handler_on('ESC')
     def do_escape(self):
         self.meta = True
+        return ''
+
+    # C-aとC-mで文字が表示されない
+    # do_left, do_rightの際に2文字分移動する必要が有る
+    # do_deleteの際に2文字分移動する必要が有る
+    @dispatch_table.set_handler_on('C-v')
+    def do_raw(self):
+        self.raw = True
         return ''
 
     @dispatch_table.set_handler_on('C_BACK')
@@ -165,20 +176,6 @@ class Dispatcher(object):
     @dispatch_table.set_handler_on('F8')
     def do_pastebin(self):
         self.repl.pastebin()
-        return ''
-
-    @dispatch_table.set_handler_on('F9')
-    def do_pager(self):
-        page(self.repl.stdout_hist[self.repl.prev_block_finished:-4])
-        return ''
-
-    @dispatch_table.set_handler_on('F2')
-    def do_show_source(self):
-        source = self.repl.get_source_of_current_name()
-        if source is not None:
-            page(source, use_hilight=self.repl.config.highlight_show_source)
-        else:
-            self.repl.statusbar.message(_('Cannot show source.'))
         return ''
 
     @dispatch_table.set_handler_on('\n \r PADENTER')

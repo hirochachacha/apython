@@ -70,7 +70,7 @@ from bpython.formatter import BPythonFormatter
 from bpython import importcompletion
 
 # This for config
-from bpython.config import Struct
+from bpython.config.struct import Struct
 
 # This for i18n
 from bpython import translations
@@ -79,7 +79,7 @@ from bpython.translations import _
 from bpython import repl
 from bpython._py3compat import py3
 from bpython import autocomplete
-import bpython.args
+import bpython.config.args
 
 if not py3:
     import inspect
@@ -310,6 +310,13 @@ class CLIRepl(repl.Repl):
 
     def __init__(self, scr, interp, statusbar, config, idle=None):
         from bpython.key.dispatcher import Dispatcher
+        if hasattr(config, 'dispatcher'):
+            if issubclass(config.dispatcher, Dispatcher):
+                dispatcher_class = config.dispatcher
+            else:
+                dispatcher_class = Dispatcher
+        else:
+            dispatcher_class = Dispatcher
 
         repl.Repl.__init__(self, interp, config)
         self.interp.writetb = self.writetb
@@ -329,7 +336,7 @@ class CLIRepl(repl.Repl):
         self.formatter = BPythonFormatter(config.color_scheme)
         self.interact = CLIInteraction(self.config, statusbar=self.statusbar)
 
-        self.key_dispatcher = Dispatcher(self)
+        self.key_dispatcher = dispatcher_class(self)
 
         if config.cli_suggestion_width <= 0 or config.cli_suggestion_width > 1:
             config.cli_suggestion_width = 0.8
@@ -1697,7 +1704,7 @@ def main_curses(scr, args, config, interactive=True, locals_=None,
     if args:
         exit_value = 0
         try:
-            bpython.args.exec_code(interpreter, args)
+            bpython.config.args.exec_code(interpreter, args)
         except SystemExit, e:
             # The documentation of code.InteractiveInterpreter.runcode claims
             # that it reraises SystemExit. However, I can't manage to trigger
@@ -1733,7 +1740,7 @@ def main(args=None, locals_=None, banner=None):
     translations.init()
 
 
-    config, options, exec_args = bpython.args.parse(args)
+    config, options, exec_args = bpython.config.args.parse_and_load(bpython.config.config, args)
 
     # Save stdin, stdout and stderr for later restoration
     orig_stdin = sys.stdin

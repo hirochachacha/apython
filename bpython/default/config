@@ -21,11 +21,8 @@ pastebin_private = True
 pastebin_show_url = http://bpaste.net/show/$paste_id/
 pastebin_helper =
 save_append_py = False
+editor =
 
 [cli]
 suggestion_width = 0.8
 trim_prompts = False
-
-[gtk]
-font = monospace 10
-color_scheme = default
