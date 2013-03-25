@@ -80,13 +80,6 @@ def _loadini(struct, configfile):
     struct.hist_duplicates = config.getboolean('general', 'hist_duplicates')
     struct.flush_output = config.getboolean('general', 'flush_output')
 
-    struct.pastebin_confirm = config.getboolean('general', 'pastebin_confirm')
-    struct.pastebin_private = config.getboolean('general', 'pastebin_private')
-    struct.pastebin_url = config.get('general', 'pastebin_url')
-    struct.pastebin_private = config.get('general', 'pastebin_private')
-    struct.pastebin_show_url = config.get('general', 'pastebin_show_url')
-    struct.pastebin_helper = config.get('general', 'pastebin_helper')
-
     struct.cli_suggestion_width = config.getfloat('cli',
                                                   'suggestion_width')
     struct.cli_trim_prompts = config.getboolean('cli',

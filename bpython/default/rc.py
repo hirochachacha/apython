@@ -25,6 +25,12 @@ def do_pager(dispatcher):
     return ''
 
 
+# @dispatch_table.set_handler_on('F8')
+# def do_pastebin(self):
+    # self.repl.pastebin()
+    # return ''
+
+
 del dispatch_table
 del do_show_source
 del do_pager

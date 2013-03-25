@@ -1421,23 +1421,23 @@ class Statusbar(object):
 
         o = ''
         while True:
-            c = self.win.getch()
+            c = self.get_key()
 
             # '\b'
-            if c == 127:
+            if c == chr(127):
                 o = bs(o)
             # '\n'
-            elif c == 10:
+            elif c == chr(10):
                 break
             # ESC
-            elif c == 27:
+            elif c == chr(27):
                 curses.flushinp()
                 raise ValueError
             # literal
-            elif 0 < c < 127:
-                c = chr(c)
-                self.win.addstr(c, get_colpair(self.config, 'prompt'))
-                o += c
+            else:
+                if len(c) == 1 and not unicodedata.category(c) == 'Cc':
+                    self.win.addstr(c.encode(sys.__stdout__.encoding), get_colpair(self.config, 'prompt'))
+                    o += c
 
         self.settext(self._s)
         return o
@@ -1476,6 +1476,40 @@ class Statusbar(object):
         """Clear the status bar."""
         self.win.clear()
 
+    def get_key(self):
+        key = ''
+        while True:
+            try:
+                key += self.win.getkey()
+                if py3:
+                    # Seems like we get a in the locale's encoding
+                    # encoded string in Python 3 as well, but of
+                    # type str instead of bytes, hence convert it to
+                    # bytes first and decode then
+                    key = key.encode('latin-1').decode(getpreferredencoding())
+                else:
+                    key = key.decode(getpreferredencoding())
+                self.win.nodelay(False)
+            except UnicodeDecodeError:
+                # Yes, that actually kind of sucks, but I don't see another way to get
+                # input right
+                self.win.nodelay(True)
+            except curses.error:
+                # I'm quite annoyed with the ambiguity of this exception handler. I previously
+                # caught "curses.error, x" and accessed x.message and checked that it was "no
+                # input", which seemed a crappy way of doing it. But then I ran it on a
+                # different computer and the exception seems to have entirely different
+                # attributes. So let's hope getkey() doesn't raise any other crazy curses
+                # exceptions. :)
+                self.win.nodelay(False)
+                # XXX What to do here? Raise an exception?
+                if key:
+                    return key
+            else:
+                if key != '\x00':
+                    return key
+                else:
+                    key = ''
 
 def init_wins(scr, config):
     """Initialise the two windows (the main repl interface and the little

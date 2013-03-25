@@ -14,12 +14,6 @@ hist_duplicates = True
 paste_time = 0.02
 syntax = True
 tab_length = 4
-pastebin_confirm = True
-pastebin_private = False
-pastebin_url = http://bpaste.net/xmlrpc/
-pastebin_private = True
-pastebin_show_url = http://bpaste.net/show/$paste_id/
-pastebin_helper =
 save_append_py = False
 editor =
 

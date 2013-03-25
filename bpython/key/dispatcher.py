@@ -45,10 +45,11 @@ class Dispatcher(object):
     # C-aとC-mで文字が表示されない
     # do_left, do_rightの際に2文字分移動する必要が有る
     # do_deleteの際に2文字分移動する必要が有る
-    @dispatch_table.set_handler_on('C-v')
-    def do_raw(self):
-        self.raw = True
-        return ''
+    # (1..31)までのascii
+    # @dispatch_table.set_handler_on('C-v')
+    # def do_raw(self):
+        # self.raw = True
+        # return ''
 
     @dispatch_table.set_handler_on('C_BACK')
     def do_cbackspace(self):
@@ -171,11 +172,6 @@ class Dispatcher(object):
     @dispatch_table.set_handler_on('C-s')
     def do_save(self):
         self.repl.write2file()
-        return ''
-
-    @dispatch_table.set_handler_on('F8')
-    def do_pastebin(self):
-        self.repl.pastebin()
         return ''
 
     @dispatch_table.set_handler_on('\n \r PADENTER')

@@ -266,10 +266,6 @@ class Repl(object):
         self.interact = Interaction(self.config)
         self.ps1 = '>>> '
         self.ps2 = '... '
-        # previous pastebin content to prevent duplicate pastes, filled on call
-        # to repl.pastebin
-        self.prev_pastebin_content = ''
-        self.prev_pastebin_url = ''
         # Necessary to fix mercurial.ui.ui expecting sys.stderr to have this
         # attribute
         self.closed = False
@@ -634,100 +630,6 @@ class Repl(object):
         else:
             self.interact.notify('Saved to %s.' % (fn, ))
 
-    def pastebin(self, s=None):
-        """Upload to a pastebin and display the URL in the status bar."""
-
-        if s is None:
-            s = self.getstdout()
-
-        if (self.config.pastebin_confirm and
-            not self.interact.confirm(_("Pastebin buffer? (y/N) "))):
-            self.interact.notify(_("Pastebin aborted"))
-            return
-        return self.do_pastebin(s)
-
-    def do_pastebin(self, s):
-        """Actually perform the upload."""
-        if s == self.prev_pastebin_content:
-            self.interact.notify(_('Duplicate pastebin. Previous URL: %s') %
-                                  (self.prev_pastebin_url, ))
-            return self.prev_pastebin_url
-
-        if self.config.pastebin_helper:
-            return self.do_pastebin_helper(s)
-        else:
-            return self.do_pastebin_xmlrpc(s)
-
-    def do_pastebin_xmlrpc(self, s):
-        """Upload to pastebin via XML-RPC."""
-        try:
-            pasteservice = ServerProxy(self.config.pastebin_url)
-        except IOError, e:
-            self.interact.notify(_("Pastebin error for URL '%s': %s") %
-                                 (self.config.pastebin_url, str(e)))
-            return
-
-        self.interact.notify(_('Posting data to pastebin...'))
-        try:
-            paste_id = pasteservice.pastes.newPaste('pycon', s, '', '', '',
-                   self.config.pastebin_private)
-        except (SocketError, XMLRPCError), e:
-            self.interact.notify(_('Upload failed: %s') % (str(e), ) )
-            return
-
-        self.prev_pastebin_content = s
-
-        paste_url_template = Template(self.config.pastebin_show_url)
-        paste_id = urlquote(paste_id)
-        paste_url = paste_url_template.safe_substitute(paste_id=paste_id)
-        self.prev_pastebin_url = paste_url
-        self.interact.notify(_('Pastebin URL: %s') % (paste_url, ), 10)
-        return paste_url
-
-    def do_pastebin_helper(self, s):
-        """Call out to helper program for pastebin upload."""
-        self.interact.notify(_('Posting data to pastebin...'))
-
-        try:
-            helper = subprocess.Popen('',
-                                      executable=self.config.pastebin_helper,
-                                      stdin=subprocess.PIPE,
-                                      stdout=subprocess.PIPE)
-            helper.stdin.write(s.encode(getpreferredencoding()))
-            output = helper.communicate()[0].decode(getpreferredencoding())
-            paste_url = output.split()[0]
-        except OSError, e:
-            if e.errno == errno.ENOENT:
-                self.interact.notify(_('Upload failed: '
-                                       'Helper program not found.'))
-            else:
-                self.interact.notify(_('Upload failed: '
-                                       'Helper program could not be run.'))
-            return
-
-        if helper.returncode != 0:
-            self.interact.notify(_('Upload failed: '
-                                   'Helper program returned non-zero exit '
-                                   'status %s.' % (helper.returncode, )))
-            return
-
-        if not paste_url:
-            self.interact.notify(_('Upload failed: '
-                                   'No output from helper program.'))
-            return
-        else:
-            parsed_url = urlparse(paste_url)
-            if (not parsed_url.scheme
-                or any(unicodedata.category(c) == 'Cc' for c in paste_url)):
-                self.interact.notify(_("Upload failed: "
-                                       "Failed to recognize the helper "
-                                       "program's output as an URL."))
-                return
-
-        self.prev_pastebin_content = s
-        self.interact.notify(_('Pastebin URL: %s') % (paste_url, ), 10)
-        return paste_url
-
     def push(self, s, insert_into_history=True):
         """Push a line of code onto the buffer so it can process it all
         at once when a code block ends"""
@@ -771,7 +673,7 @@ class Repl(object):
 
         entries = list(self.rl_history.entries)
 
-        self.history = self.history[:-n]
+        self.history.entries = self.history[:-n]
 
         self.reevaluate()
 

@@ -56,12 +56,15 @@ def page_internal(data):
 
 def page(data, use_internal=False, use_hilight=False):
     command = get_pager_command()
+    if use_hilight:
+        data = pygments.format(
+                PythonLexer(encoding=sys.__stdout__.encoding).get_tokens(data),
+                TerminalFormatter(encoding=sys.__stdout__.encoding)
+        )
     if not py3:
         if isinstance(data, unicode):
             data = data.encode(sys.__stdout__.encoding, 'replace')
 
-    if use_hilight:
-        data = pygments.format(PythonLexer().get_tokens(data), TerminalFormatter())
     if not command or use_internal:
         page_internal(data)
     else:
