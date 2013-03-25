@@ -70,7 +70,8 @@ from bpython.formatter import BPythonFormatter
 from bpython.formatter import BPythonFormatter
 
 # This for completion
-from bpython import importcompletion
+from bpython.completion import importcompletion
+from bpython.completion import autocomplete
 
 # This for config
 from bpython.config.struct import Struct
@@ -81,7 +82,6 @@ from bpython.translations import _
 
 from bpython import repl
 from bpython._py3compat import py3
-from bpython import autocomplete
 import bpython.config.args
 
 if not py3:
@@ -993,14 +993,6 @@ class CLIRepl(repl.Repl):
         self.scr.mvwin(self.y, self.x)
         self.statusbar.resize(refresh=False)
         self.redraw()
-
-
-    def getstdout(self):
-        """This method returns the 'spoofed' stdout buffer, for writing to a
-        file or sending to a pastebin or whatever."""
-
-        return '\n'.join(self.stdout_history) + '\n'
-
 
     def reevaluate(self):
         """Clear the buffer, redraw the screen and re-evaluate the history"""

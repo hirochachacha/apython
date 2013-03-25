@@ -48,11 +48,11 @@ from xmlrpclib import ServerProxy, Error as XMLRPCError
 from pygments.token import Token
 
 import bpython
-from bpython import importcompletion, inspection
+from bpython.completion import importcompletion, inspection
 from bpython._py3compat import PythonLexer, py3
 from bpython.formatter import Parenthesis
 from bpython.translations import _
-from bpython.autocomplete import Autocomplete
+from bpython.completion.autocomplete import Autocomplete
 from bpython.history import History
 
 
@@ -146,10 +146,12 @@ class Interpreter(code.InteractiveInterpreter):
 
 
 class MatchesIterator(object):
-
-    def __init__(self, current_word='', matches=[]):
+    def __init__(self, current_word='', matches=None):
         self.current_word = current_word
-        self.matches = list(matches)
+        if matches:
+            self.matches = list(matches)
+        else:
+            self.matches = []
         self.index = -1
 
     def __nonzero__(self):
@@ -314,7 +316,7 @@ class Repl(object):
         raise(NotImplementedError("current_line should be implemented in subclass"))
 
     def getstdout(self):
-        raise(NotImplementedError("getstdout should be implemented in subclass"))
+        return str(self.stdout_history)
 
     def current_string(self, concatenate=False):
         """If the line ends in a string get it, otherwise return ''"""

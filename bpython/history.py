@@ -45,6 +45,9 @@ class History(object):
     def __setitem__(self, index, value):
         self.entries[index] = value
 
+    def __delitem__(self, index):
+        del self.entries[index]
+
     def __iter__(self):
         for entry in self.entries:
             yield entry
@@ -58,8 +61,11 @@ class History(object):
     def __len__(self):
         return len(self.entries)
 
+    def __contains__(self, item):
+        return item in self.entries
+
     def __str__(self):
-        return str(self.entries)
+        return '\n'.join(self.entries) + '\n'
 
     @property
     def is_at_end(self):
@@ -167,4 +173,3 @@ class History(object):
             if search_term in val:
                 return idx + 1
         return self.index
-
