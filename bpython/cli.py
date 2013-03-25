@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+#coding: utf-8
+
 # The MIT License
 #
 # Copyright (c) 2008 Bob Farrell
@@ -310,18 +313,10 @@ class CLIRepl(repl.Repl):
 
     def __init__(self, scr, interp, statusbar, config, idle=None):
         from bpython.key.dispatcher import Dispatcher
-        if hasattr(config, 'dispatcher'):
-            if issubclass(config.dispatcher, Dispatcher):
-                dispatcher_class = config.dispatcher
-            else:
-                dispatcher_class = Dispatcher
-        else:
-            dispatcher_class = Dispatcher
 
         repl.Repl.__init__(self, interp, config)
         self.interp.writetb = self.writetb
         self.scr = scr
-        self.stdout_hist = ''
         self.list_win = newwin(get_colpair(config, 'background'), 1, 1, 1, 1)
         self.cpos = 0
         self.do_exit = False
@@ -336,7 +331,7 @@ class CLIRepl(repl.Repl):
         self.formatter = BPythonFormatter(config.color_scheme)
         self.interact = CLIInteraction(self.config, statusbar=self.statusbar)
 
-        self.key_dispatcher = dispatcher_class(self)
+        self.key_dispatcher = Dispatcher(self)
 
         if config.cli_suggestion_width <= 0 or config.cli_suggestion_width > 1:
             config.cli_suggestion_width = 0.8
@@ -884,15 +879,16 @@ class CLIRepl(repl.Repl):
 
     def prompt(self, more):
         """Show the appropriate Python prompt"""
+        self.stdout_history.append_raw("")
         if not more:
             self.echo("\x01%s\x03%s" % (self.config.color_scheme['prompt'], self.ps1))
-            self.stdout_hist += self.ps1
+            self.stdout_history[-1] += self.ps1
             self.s_hist.append('\x01%s\x03%s\x04' %
                                (self.config.color_scheme['prompt'], self.ps1))
         else:
             prompt_more_color = self.config.color_scheme['prompt_more']
             self.echo("\x01%s\x03%s" % (prompt_more_color, self.ps2))
-            self.stdout_hist += self.ps2
+            self.stdout_history[-1] += self.ps2
             self.s_hist.append('\x01%s\x03%s\x04' % (prompt_more_color, self.ps2))
 
     def push(self, s, insert_into_history=True):
@@ -958,13 +954,11 @@ class CLIRepl(repl.Repl):
             self.history.append(inp)
             self.s_hist[-1] += self.f_string
             if py3:
-                self.stdout_hist += inp + '\n'
+                self.stdout_history[-1] += inp
             else:
-                self.stdout_hist += inp.encode(getpreferredencoding()) + '\n'
-            stdout_position = len(self.stdout_hist)
+                self.stdout_history[-1] += inp.encode(getpreferredencoding())
             more = self.push(inp)
             if not more:
-                self.prev_block_finished = stdout_position
                 self.s = ''
         return self.exit_value
 
@@ -1005,14 +999,14 @@ class CLIRepl(repl.Repl):
         """This method returns the 'spoofed' stdout buffer, for writing to a
         file or sending to a pastebin or whatever."""
 
-        return self.stdout_hist + '\n'
+        return '\n'.join(self.stdout_history) + '\n'
 
 
     def reevaluate(self):
         """Clear the buffer, redraw the screen and re-evaluate the history"""
 
         self.evaluating = True
-        self.stdout_hist = ''
+        self.stdout_history.reset()
         self.f_string = ''
         self.buffer = []
         self.scr.erase()
@@ -1025,9 +1019,9 @@ class CLIRepl(repl.Repl):
         self.iy, self.ix = self.scr.getyx()
         for line in self.history:
             if py3:
-                self.stdout_hist += line + '\n'
+                self.stdout_history[-1] += line
             else:
-                self.stdout_hist += line.encode(getpreferredencoding()) + '\n'
+                self.stdout_history[-1] += line.encode(getpreferredencoding())
             self.print_line(line)
             self.s_hist[-1] += self.f_string
             # I decided it was easier to just do this manually
@@ -1064,10 +1058,7 @@ class CLIRepl(repl.Repl):
         if not py3 and isinstance(t, unicode):
             t = t.encode(getpreferredencoding())
 
-        if not self.stdout_hist:
-            self.stdout_hist = t
-        else:
-            self.stdout_hist += t
+        self.stdout_history.append(t)
 
         self.echo(s)
         self.s_hist.append(s.rstrip())
@@ -1368,11 +1359,16 @@ class Statusbar(object):
         self.config = config
 
         self.s = s or ''
-        self._s = self.s
+        if s:
+            self._s = self.s
         self.c = c
         self.timer = 0
         self.pwin = pwin
-        self.settext(s, c)
+        self.settext(self._s, c)
+
+    @property
+    def _s(self):
+        return " <C-r> Rewind  <C-s> Save  <F8> Pastebin <F9> Pager  <F2> Show Source "
 
     def size(self):
         """Set instance attributes for x and y top left corner coordinates
@@ -1503,10 +1499,7 @@ def init_wins(scr, config):
     # Thanks to Angus Gibson for pointing out this missing line which was causing
     # problems that needed dirty hackery to fix. :)
 
-    statusbar = Statusbar(scr, main_win, background, config,
-        _(" <C-r> Rewind  <C-s> Save  <F8> Pastebin <F9> Pager  <F2> Show Source "),
-        get_colpair(config, 'main')
-    )
+    statusbar = Statusbar(scr, main_win, background, config, None, get_colpair(config, 'main'))
 
     return main_win, statusbar
 

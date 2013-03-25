@@ -29,3 +29,6 @@ package_dir = os.path.abspath(os.path.dirname(__file__))
 def embed(locals_=None, args=['-i', '-q'], banner=None):
     from bpython.cli import main
     return main(args, locals_, banner)
+
+
+running = None #load REPL instance

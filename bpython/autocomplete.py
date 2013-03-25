@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+#coding: utf-8
+
 # The MIT License
 #
 # Copyright (c) 2009-2012 the bpython authors.
@@ -24,6 +27,7 @@
 import __builtin__
 import rlcompleter
 import re
+import keyword
 from bpython import inspection
 
 # Needed for special handling of __abstractmethods__
@@ -113,7 +117,6 @@ class Autocomplete(rlcompleter.Completer):
 
         hash = {}
         n = len(text)
-        import keyword
         for word in keyword.kwlist:
             if self.method_match(word, n, text):
                 hash[word] = 1

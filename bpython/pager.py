@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+#coding: utf-8
+
 # The MIT License
 #
 # Copyright (c) 2009-2011 Andreas Stuehrk
@@ -32,6 +35,8 @@ import pygments
 from pygments.formatters import TerminalFormatter
 from pygments.lexers import PythonLexer
 
+from bpython._py3compat import py3
+
 
 __all__ = ['page']
 
@@ -51,6 +56,10 @@ def page_internal(data):
 
 def page(data, use_internal=False, use_hilight=False):
     command = get_pager_command()
+    if not py3:
+        if isinstance(data, unicode):
+            data = data.encode(sys.__stdout__.encoding, 'replace')
+
     if use_hilight:
         data = pygments.format(PythonLexer().get_tokens(data), TerminalFormatter())
     if not command or use_internal:
@@ -59,8 +68,6 @@ def page(data, use_internal=False, use_hilight=False):
         curses.endwin()
         try:
             popen = subprocess.Popen(command, stdin=subprocess.PIPE)
-            if isinstance(data, unicode):
-                data = data.encode(sys.__stdout__.encoding, 'replace')
             popen.stdin.write(data)
             popen.stdin.close()
         except OSError, e:

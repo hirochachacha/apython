@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+#coding: utf-8
+
 """
 Module to handle command line argument parsing, for all front-ends.
 """
@@ -11,6 +14,9 @@ from optparse import OptionParser, OptionGroup
 from bpython import __version__
 from bpython.config.struct import default_config_path, loadini, Struct
 from bpython.translations import _
+
+
+__all__ = ['exec_code', 'parse_and_load']
 
 
 class OptionParserFailed(ValueError):

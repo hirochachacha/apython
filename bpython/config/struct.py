@@ -1,8 +1,14 @@
+#!/usr/bin/env python
+#coding: utf-8
+
 from __future__ import with_statement
 import os
 import sys
 from ConfigParser import ConfigParser
 from itertools import chain
+
+
+__all__ = ['loadini', 'Struct', 'default_config_path']
 
 
 DEFAULT_COLORS = {

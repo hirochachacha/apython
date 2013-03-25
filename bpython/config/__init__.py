@@ -3,4 +3,8 @@
 
 from bpython.config.struct import Struct
 
+
+__all__ = ['config']
+
+
 config = Struct()

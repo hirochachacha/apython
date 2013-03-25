@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+#coding: utf-8
+
 # The MIT License
 #
 # Copyright (c) 2009-2011 the bpython authors.
@@ -44,22 +47,13 @@ from xmlrpclib import ServerProxy, Error as XMLRPCError
 
 from pygments.token import Token
 
+import bpython
 from bpython import importcompletion, inspection
 from bpython._py3compat import PythonLexer, py3
 from bpython.formatter import Parenthesis
 from bpython.translations import _
 from bpython.autocomplete import Autocomplete
-
-
-# Needed for special handling of __abstractmethods__
-# abc only exists since 2.6, so check both that it exists and that it's
-# the one we're expecting
-try:
-    import abc
-    abc.ABCMeta
-    has_abc = True
-except (ImportError, AttributeError):
-    has_abc = False
+from bpython.history import History
 
 
 if py3:
@@ -151,131 +145,6 @@ class Interpreter(code.InteractiveInterpreter):
             self.write(line)
 
 
-class History(object):
-
-    def __init__(self, entries=None, duplicates=False):
-        if entries is None:
-            self.entries = ['']
-        else:
-            self.entries = list(entries)
-        self.index = 0
-        self.saved_line = ''
-        self.duplicates = duplicates
-
-    def append(self, line):
-        line = line.rstrip('\n')
-        if line:
-            if not self.duplicates:
-                # remove duplicates
-                try:
-                    while True:
-                        self.entries.remove(line)
-                except ValueError:
-                    pass
-            self.entries.append(line)
-
-    def first(self):
-        """Move back to the beginning of the history."""
-        if not self.is_at_end:
-            self.index = len(self.entries)
-        return self.entries[-self.index]
-
-    def back(self, start=True, search=False):
-        """Move one step back in the history."""
-        if not self.is_at_end:
-            if search:
-                self.index += self.find_partial_match_backward(self.saved_line)
-            elif start:
-                self.index += self.find_match_backward(self.saved_line)
-            else:
-                self.index += 1
-        return self.entries[-self.index] if self.index else self.saved_line
-
-    def find_match_backward(self, search_term):
-        filtered_list_len = len(self.entries) - self.index
-        for idx, val in enumerate(reversed(self.entries[:filtered_list_len])):
-            if val.startswith(search_term):
-                return idx + 1
-        return 0
-
-    def find_partial_match_backward(self, search_term):
-        filtered_list_len = len(self.entries) - self.index
-        for idx, val in enumerate(reversed(self.entries[:filtered_list_len])):
-            if search_term in val:
-                return idx + 1
-        return 0
-
-
-    def forward(self, start=True, search=False):
-        """Move one step forward in the history."""
-        if self.index > 1:
-            if search:
-                self.index -= self.find_partial_match_forward(self.saved_line)
-            elif start:
-                self.index -= self.find_match_forward(self.saved_line)
-            else:
-                self.index -= 1
-            return self.entries[-self.index] if self.index else self.saved_line
-        else:
-            self.index = 0
-            return self.saved_line
-
-    def find_match_forward(self, search_term):
-        filtered_list_len = len(self.entries) - self.index + 1
-        for idx, val in enumerate(self.entries[filtered_list_len:]):
-            if val.startswith(search_term):
-                return idx + 1
-        return self.index
-
-    def find_partial_match_forward(self, search_term):
-        filtered_list_len = len(self.entries) - self.index + 1
-        for idx, val in enumerate(self.entries[filtered_list_len:]):
-            if search_term in val:
-                return idx + 1
-        return self.index
-
-
-
-    def last(self):
-        """Move forward to the end of the history."""
-        if not self.is_at_start:
-            self.index = 0
-        return self.entries[0]
-
-    @property
-    def is_at_end(self):
-        return self.index >= len(self.entries) or self.index == -1
-
-    @property
-    def is_at_start(self):
-        return self.index == 0
-
-    def enter(self, line):
-        if self.index == 0:
-            self.saved_line = line
-
-    @classmethod
-    def from_filename(cls, filename):
-        history = cls()
-        history.load(filename)
-        return history
-
-    def load(self, filename, encoding):
-        with codecs.open(filename, 'r', encoding, 'ignore') as hfile:
-            for line in hfile:
-                self.append(line)
-
-    def reset(self):
-        self.index = 0
-        self.saved_line = ''
-
-    def save(self, filename, encoding, lines=0):
-        with codecs.open(filename, 'w', encoding, 'ignore') as hfile:
-            for line in self.entries[-lines:]:
-                hfile.write(line)
-                hfile.write('\n')
-
-
 class MatchesIterator(object):
 
     def __init__(self, current_word='', matches=[]):
@@ -284,6 +153,9 @@ class MatchesIterator(object):
         self.index = -1
 
     def __nonzero__(self):
+        return self.index != -1
+
+    def __bool__(self):
         return self.index != -1
 
     def __iter__(self):
@@ -376,9 +248,10 @@ class Repl(object):
         self.interp = interp
         self.interp.syntaxerror_callback = self.clear_current_line
         self.match = False
-        self.rl_history = History(duplicates=config.hist_duplicates)
         self.s_hist = []
-        self.history = []
+        self.rl_history = History(allow_duplicates=self.config.hist_duplicates)
+        self.stdin_history = History()
+        self.stdout_history = History()
         self.evaluating = False
         self.completer = Autocomplete(self.interp.locals, config)
         self.matches = []
@@ -388,7 +261,6 @@ class Repl(object):
         self.highlighted_paren = None
         self.list_win_visible = False
         self._C = {}
-        self.prev_block_finished = 0
         self.interact = Interaction(self.config)
         self.ps1 = '>>> '
         self.ps2 = '... '
@@ -400,10 +272,17 @@ class Repl(object):
         # attribute
         self.closed = False
 
+        bpython.running = self
+
         pythonhist = os.path.expanduser(self.config.hist_file)
         if os.path.exists(pythonhist):
             self.rl_history.load(pythonhist,
                     getpreferredencoding() or "ascii")
+
+    #alias
+    @property
+    def history(self):
+        return self.stdin_history
 
     def startup(self):
         """
@@ -895,6 +774,9 @@ class Repl(object):
         self.reevaluate()
 
         self.rl_history.entries = entries
+
+    def reevaluate(self):
+        raise(NotImplementedError("reevaluate should be implemented in subclass"))
 
     def flush(self):
         """Olivier Grisel brought it to my attention that the logging
