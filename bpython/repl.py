@@ -26,32 +26,21 @@
 
 from __future__ import with_statement
 import code
-import codecs
-import errno
 import inspect
 import os
 import pydoc
-import subprocess
 import sys
 import textwrap
 import traceback
-import unicodedata
 from glob import glob
 from itertools import takewhile
 from locale import getpreferredencoding
-from socket import error as SocketError
-from string import Template
-from urllib import quote as urlquote
-from urlparse import urlparse
-from xmlrpclib import ServerProxy, Error as XMLRPCError
 
 from pygments.token import Token
 
 import bpython
 from bpython.completion import importcompletion, inspection
 from bpython._py3compat import PythonLexer, py3
-from bpython.formatter import Parenthesis
-from bpython.translations import _
 from bpython.completion.autocomplete import Autocomplete
 from bpython.history import History
 
@@ -179,7 +168,8 @@ class MatchesIterator(object):
 
         return self.matches[self.index]
 
-    def update(self, current_word='', matches=[]):
+    def update(self, current_word='', matches=None):
+        if not matches: matches = []
         if current_word != self.current_word:
             self.current_word = current_word
             self.matches = list(matches)
@@ -233,7 +223,7 @@ class Repl(object):
     The other stack is for keeping a history for pressing the up/down keys
     to go back and forth between lines.
 
-    XXX Subclasses should implement echo, current_line, cw
+    XXX Subclasses should implement echo, current_line, current_word
     """
 
     def __init__(self, interp, config):
@@ -243,9 +233,7 @@ class Repl(object):
 
         config is a populated bpython.config.Struct.
         """
-
         self.config = config
-        self.cut_buffer = ''
         self.buffer = []
         self.interp = interp
         self.interp.syntaxerror_callback = self.clear_current_line
@@ -260,7 +248,6 @@ class Repl(object):
         self.matches_iter = MatchesIterator()
         self.argspec = None
         self.current_func = None
-        self.highlighted_paren = None
         self.list_win_visible = False
         self._C = {}
         self.interact = Interaction(self.config)
@@ -277,10 +264,31 @@ class Repl(object):
             self.rl_history.load(pythonhist,
                     getpreferredencoding() or "ascii")
 
+
     #alias
     @property
     def history(self):
         return self.stdin_history
+
+    def current_line(self):
+        raise(NotImplementedError("current_line should be implemented in subclass"))
+
+    def clear_current_line(self):
+        """This is used as the exception callback for the Interpreter instance.
+        It prevents autoindentation from occuring after a traceback."""
+        raise(NotImplementedError("clear_current_line should be implemented in subclass"))
+
+    def current_word(self):
+        raise(NotImplementedError("current_word should be implemented in subclass"))
+
+    def reevaluate(self):
+        raise(NotImplementedError("reevaluate should be implemented in subclass"))
+
+    def tab(self):
+        raise(NotImplementedError("tab should be implemented in subclass"))
+
+    def tokenize(self, s, newline=False):
+        raise(NotImplementedError("tokenize should be implemented in subclass"))
 
     def startup(self):
         """
@@ -307,9 +315,6 @@ class Repl(object):
                         self.interp.runsource(f.read(), filename, 'exec')
                     else:
                         self.interp.runsource(f.read(), filename, 'exec', encode=False)
-
-    def current_line(self):
-        raise(NotImplementedError("current_line should be implemented in subclass"))
 
     def getstdout(self):
         return str(self.stdout_history)
@@ -440,7 +445,6 @@ class Repl(object):
         display them in a window. Also check if there's an available argspec
         (via the inspect module) and bang that on top of the completions too.
         The return value is whether the list_win is visible or not."""
-
         self.docstring = None
         if not self.get_args():
             self.argspec = None
@@ -455,12 +459,12 @@ class Repl(object):
                 if not self.docstring:
                     self.docstring = None
 
-        cw = self.cw()
+        current_word = self.current_word()
         cs = self.current_string()
-        if not cw:
+        if not current_word:
             self.matches = []
             self.matches_iter.update()
-        if not (cw or cs):
+        if not (current_word or cs):
             return bool(self.argspec)
 
         if cs and tab:
@@ -484,7 +488,7 @@ class Repl(object):
 
         # Check for import completion
         e = False
-        matches = importcompletion.complete(self.current_line(), cw)
+        matches = importcompletion.complete(self.current_line(), current_word)
         if matches is not None and not matches:
             self.matches = []
             self.matches_iter.update()
@@ -493,7 +497,7 @@ class Repl(object):
         if matches is None:
             # Nope, no import, continue with normal completion
             try:
-                self.completer.complete(cw, 0)
+                self.completer.complete(current_word, 0)
             except Exception:
                 # This sucks, but it's either that or list all the exceptions that could
                 # possibly be raised here, so if anyone wants to do that, feel free to send me
@@ -506,17 +510,17 @@ class Repl(object):
                     self.buffer[0].startswith("class ") and
                     self.current_line().lstrip().startswith("def ")):
                     matches.extend(name for name in self.config.magic_methods
-                                   if name.startswith(cw))
+                                   if name.startswith(current_word))
 
         if not e and self.argspec:
             matches.extend(name + '=' for name in self.argspec[1][0]
-                           if isinstance(name, basestring) and name.startswith(cw))
+                           if isinstance(name, basestring) and name.startswith(current_word))
             if py3:
                 matches.extend(name + '=' for name in self.argspec[1][4]
-                               if name.startswith(cw))
+                               if name.startswith(current_word))
 
         # unless the first character is a _ filter out all attributes starting with a _
-        if not e and not cw.split('.')[-1].startswith('_'):
+        if not e and not current_word.split('.')[-1].startswith('_'):
             matches = [match for match in matches
                        if not match.split('.')[-1].startswith('_')]
 
@@ -529,19 +533,17 @@ class Repl(object):
             # remove duplicates
             self.matches = sorted(set(matches))
 
-
         if len(self.matches) == 1 and not self.config.auto_display_list:
             self.list_win_visible = True
             self.tab()
             return False
 
-        self.matches_iter.update(cw, self.matches)
+        self.matches_iter.update(current_word, self.matches)
         return True
 
     def format_docstring(self, docstring, width, height):
         """Take a string and try to format it into a sane list of strings to be
         put into the suggestion box."""
-
         lines = docstring.split('\n')
         out = []
         i = 0
@@ -604,7 +606,7 @@ class Repl(object):
         if fn.startswith('~'):
             fn = os.path.expanduser(fn)
         if not fn.endswith('.py') and self.config.save_append_py:
-            fn = fn + '.py'
+            fn += '.py'
 
         mode = 'w'
         if os.path.exists(fn):
@@ -679,9 +681,6 @@ class Repl(object):
 
         self.rl_history.entries = entries
 
-    def reevaluate(self):
-        raise(NotImplementedError("reevaluate should be implemented in subclass"))
-
     def flush(self):
         """Olivier Grisel brought it to my attention that the logging
         module tries to call this method, since it makes assumptions
@@ -698,97 +697,6 @@ class Repl(object):
 
     def close(self):
         """See the flush() method docstring."""
-
-    def tokenize(self, s, newline=False):
-        """Tokenize a line of code."""
-
-        source = '\n'.join(self.buffer + [s])
-        cursor = len(source) - self.cpos
-        if self.cpos:
-            cursor += 1
-        stack = list()
-        all_tokens = list(PythonLexer().get_tokens(source))
-        # Unfortunately, Pygments adds a trailing newline and strings with
-        # no size, so strip them
-        while not all_tokens[-1][1]:
-            all_tokens.pop()
-        all_tokens[-1] = (all_tokens[-1][0], all_tokens[-1][1].rstrip('\n'))
-        line = pos = 0
-        parens = dict(zip('{([', '})]'))
-        line_tokens = list()
-        saved_tokens = list()
-        search_for_paren = True
-        for (token, value) in split_lines(all_tokens):
-            pos += len(value)
-            if token is Token.Text and value == '\n':
-                line += 1
-                # Remove trailing newline
-                line_tokens = list()
-                saved_tokens = list()
-                continue
-            line_tokens.append((token, value))
-            saved_tokens.append((token, value))
-            if not search_for_paren:
-                continue
-            under_cursor = (pos == cursor)
-            if token is Token.Punctuation:
-                if value in parens:
-                    if under_cursor:
-                        line_tokens[-1] = (Parenthesis.UnderCursor, value)
-                        # Push marker on the stack
-                        stack.append((Parenthesis, value))
-                    else:
-                        stack.append((line, len(line_tokens) - 1,
-                                      line_tokens, value))
-                elif value in parens.itervalues():
-                    saved_stack = list(stack)
-                    try:
-                        while True:
-                            opening = stack.pop()
-                            if parens[opening[-1]] == value:
-                                break
-                    except IndexError:
-                        # SyntaxError.. more closed parentheses than
-                        # opened or a wrong closing paren
-                        opening = None
-                        if not saved_stack:
-                            search_for_paren = False
-                        else:
-                            stack = saved_stack
-                    if opening and opening[0] is Parenthesis:
-                        # Marker found
-                        line_tokens[-1] = (Parenthesis, value)
-                        search_for_paren = False
-                    elif opening and under_cursor and not newline:
-                        if self.cpos:
-                            line_tokens[-1] = (Parenthesis.UnderCursor, value)
-                        else:
-                            # The cursor is at the end of line and next to
-                            # the paren, so it doesn't reverse the paren.
-                            # Therefore, we insert the Parenthesis token
-                            # here instead of the Parenthesis.UnderCursor
-                            # token.
-                            line_tokens[-1] = (Parenthesis, value)
-                        (lineno, i, tokens, opening) = opening
-                        if lineno == len(self.buffer):
-                            self.highlighted_paren = (lineno, saved_tokens)
-                            line_tokens[i] = (Parenthesis, opening)
-                        else:
-                            self.highlighted_paren = (lineno, list(tokens))
-                            # We need to redraw a line
-                            tokens[i] = (Parenthesis, opening)
-                            self.reprint_line(lineno, tokens)
-                        search_for_paren = False
-                elif under_cursor:
-                    search_for_paren = False
-        if line != len(self.buffer):
-            return list()
-        return line_tokens
-
-    def clear_current_line(self):
-        """This is used as the exception callback for the Interpreter instance.
-        It prevents autoindentation from occuring after a traceback."""
-
 
 def next_indentation(line, tab_length):
     """Given a code line, return the indentation of the next line."""
@@ -814,17 +722,6 @@ def next_token_inside_string(s, inside_string):
                 elif value == inside_string:
                     inside_string = False
     return inside_string
-
-
-def split_lines(tokens):
-    for (token, value) in tokens:
-        if not value:
-            continue
-        while value:
-            head, newline, value = value.partition('\n')
-            yield (token, head)
-            if newline:
-                yield (Token.Text, newline)
 
 
 def token_is(token_type):

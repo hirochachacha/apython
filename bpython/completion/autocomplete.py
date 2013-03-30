@@ -88,7 +88,7 @@ class Autocomplete(rlcompleter.Completer):
         words = dir(obj)
         if hasattr(obj, '__class__'):
             words.append('__class__')
-            words = words + rlcompleter.get_class_members(obj.__class__)
+            words += rlcompleter.get_class_members(obj.__class__)
             if has_abc and not isinstance(obj.__class__, abc.ABCMeta):
                 try:
                     words.remove('__abstractmethods__')

@@ -32,7 +32,8 @@ class TestInspection(unittest.TestCase):
 
     def test_parsekeywordpairs(self):
         # See issue #109
-        def fails(spam=['-a', '-b']):
+        def fails(spam=None):
+            if not spam: spam = ['-a', '-b']
             pass
 
         default_arg_repr = "['-a', '-b']"

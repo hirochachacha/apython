@@ -67,7 +67,6 @@ from types import ModuleType
 from pygments import format
 from pygments.token import Token
 from bpython.formatter import BPythonFormatter
-from bpython.formatter import BPythonFormatter
 
 # This for completion
 from bpython.completion import importcompletion
@@ -81,7 +80,8 @@ from bpython import translations
 from bpython.translations import _
 
 from bpython import repl
-from bpython._py3compat import py3
+from bpython._py3compat import PythonLexer, py3
+from bpython.formatter import Parenthesis
 import bpython.config.args
 
 if not py3:
@@ -89,10 +89,8 @@ if not py3:
 
 
 # --- module globals ---
-stdscr = None
-colors = None
+app = None
 
-DO_RESIZE = False
 # ---
 
 
@@ -133,6 +131,7 @@ class FakeStream(object):
     def isatty(self):
         # some third party (amongst them mercurial) depend on this
         return True
+
 
 class FakeStdin(object):
     """Provide a fake stdin type for things like raw_input() etc."""
@@ -223,7 +222,19 @@ class FakeStdin(object):
         return ''.join(data)
 
     def readlines(self, size=-1):
-        return list(iter(self.readline, ''))
+        return list(iter(self.readline(size)))
+
+
+class FakeDict(object):
+    """Very simple dict-alike that returns a constant value for any key -
+    used as a hacky solution to using a colours dict containing colour codes if
+    colour initialisation fails."""
+    def __init__(self, val):
+        self._val = val
+
+    def __getitem__(self, k):
+        return self._val
+
 
 # TODO:
 #
@@ -237,55 +248,6 @@ class FakeStdin(object):
 # needs to be an instance of a ListWin class or something so I can wrap
 # the addstr stuff to a higher level.
 #
-
-
-def get_color(config, name):
-    global colors
-    return colors[config.color_scheme[name].lower()]
-
-
-def get_colpair(config, name):
-    return curses.color_pair(get_color(config, name) + 1)
-
-
-def make_colors(config):
-    """Init all the colours in curses and bang them into a dictionary"""
-
-    # blacK, Red, Green, Yellow, Blue, Magenta, Cyan, White, Default:
-    c = {
-        'k': 0,
-        'r': 1,
-        'g': 2,
-        'y': 3,
-        'b': 4,
-        'm': 5,
-        'c': 6,
-        'w': 7,
-        'd': -1,
-    }
-
-    if platform.system() == 'Windows':
-        c = dict(c.items() +
-            [
-            ('K', 8),
-            ('R', 9),
-            ('G', 10),
-            ('Y', 11),
-            ('B', 12),
-            ('M', 13),
-            ('C', 14),
-            ('W', 15),
-            ]
-         )
-
-    for i in range(63):
-        if i > 7:
-            j = i // 8
-        else:
-            j = c[config.color_scheme['background']]
-        curses.init_pair(i + 1, i % 8, j)
-
-    return c
 
 
 class CLIInteraction(repl.Interaction):
@@ -309,115 +271,132 @@ class CLIInteraction(repl.Interaction):
         return self.statusbar.prompt(s)
 
 
-class CLIRepl(repl.Repl):
-
-    def __init__(self, scr, interp, statusbar, config, idle=None):
+class EditableMixin(object):
+    def __init__(self, scr, config):
         from bpython.key.dispatcher import Dispatcher
-
-        repl.Repl.__init__(self, interp, config)
-        self.interp.writetb = self.writetb
         self.scr = scr
-        self.list_win = newwin(get_colpair(config, 'background'), 1, 1, 1, 1)
+        self.config = config
+        self.s = ''
+        self.cut_buffer = ""
         self.cpos = 0
         self.do_exit = False
-        self.exit_value = ()
-        self.f_string = ''
-        self.idle = idle
-        self.in_hist = False
-        self.paste_mode = False
         self.last_key_press = time.time()
-        self.s = ''
-        self.statusbar = statusbar
-        self.formatter = BPythonFormatter(config.color_scheme)
-        self.interact = CLIInteraction(self.config, statusbar=self.statusbar)
-
+        self.paste_mode = False
+        self.idle = App.idle
+        self.highlighted_paren = None
         self.key_dispatcher = Dispatcher(self)
+        self.iy, self.ix = self.scr.getyx()
 
-        if config.cli_suggestion_width <= 0 or config.cli_suggestion_width > 1:
-            config.cli_suggestion_width = 0.8
+    def p_key(self, key):
+        return self.key_dispatcher.run(key)
+
+    def get_key(self):
+        key = ''
+        while True:
+            try:
+                key += self.scr.getkey()
+                if py3:
+                    # Seems like we get a in the locale's encoding
+                    # encoded string in Python 3 as well, but of
+                    # type str instead of bytes, hence convert it to
+                    # bytes first and decode then
+                    key = key.encode('latin-1').decode(getpreferredencoding())
+                else:
+                    key = key.decode(getpreferredencoding())
+                self.scr.nodelay(False)
+            except UnicodeDecodeError:
+                # Yes, that actually kind of sucks, but I don't see another way to get
+                # input right
+                self.scr.nodelay(True)
+            except curses.error:
+                # I'm quite annoyed with the ambiguity of this exception handler. I previously
+                # caught "curses.error, x" and accessed x.message and checked that it was "no
+                # input", which seemed a crappy way of doing it. But then I ran it on a
+                # different computer and the exception seems to have entirely different
+                # attributes. So let's hope getkey() doesn't raise any other crazy curses
+                # exceptions. :)
+                self.scr.nodelay(False)
+                # XXX What to do here? Raise an exception?
+                if key:
+                    return key
+            else:
+                if key != '\x00':
+                    t = time.time()
+                    self.paste_mode = (
+                        t - self.last_key_press <= self.config.paste_time
+                        )
+                    self.last_key_press = t
+                    return key
+                else:
+                    key = ''
+            finally:
+                if self.idle:
+                    self.idle(self)
+
+    def get_line(self):
+        while True:
+            key = self.get_key()
+            if self.p_key(key) is None:
+#                if self.config.cli_trim_prompts and self.s.startswith(self.ps1):
+#                    self.s = self.s[4:]
+                return self.s
 
     def addstr(self, s):
         """Add a string to the current input line and figure out
         where it should go, depending on the cursor position."""
-        self.rl_history.reset()
         if not self.cpos:
             self.s += s
         else:
             l = len(self.s)
             self.s = self.s[:l - self.cpos] + s + self.s[l - self.cpos:]
 
-        self.complete()
-
-    def atbol(self):
-        """Return True or False accordingly if the cursor is at the beginning
-        of the line (whitespace is ignored). This exists so that p_key() knows
-        how to handle the tab key being pressed - if there is nothing but white
-        space before the cursor then process it as a normal tab otherwise
-        attempt tab completion."""
-
-        return not self.s.lstrip()
-
-    def bs(self, delete_tabs=True):
-        """Process a backspace"""
-
-        self.rl_history.reset()
+    def mvc(self, i, refresh=True):
+        """This method moves the cursor relatively from the current
+        position, where:
+            0 == (right) end of current line
+            length of current line len(self.s) == beginning of current line
+        and:
+            current cursor position + i
+            for positive values of i the cursor will move towards the beginning
+            of the line, negative values the opposite."""
         y, x = self.scr.getyx()
 
-        if not self.s:
-            return
+        if self.cpos == 0 and i < 0:
+            return False
 
-        if x == self.ix and y == self.iy:
-            return
+        if x == self.ix and y == self.iy and i >= 1:
+            return False
 
-        n = 1
+        h, w = gethw()
+        if x - i < 0:
+            y -= 1
+            x = w
 
-        self.clear_wrapped_lines()
+        if x - i >= w:
+            y += 1
+            x = 0 + i
 
-        if not self.cpos:
-            # I know the nested if blocks look nasty. :(
-            if self.atbol() and delete_tabs:
-                n = len(self.s) % self.config.tab_length
-                if not n:
-                    n = self.config.tab_length
-
-            self.s = self.s[:-n]
-        else:
-            self.s = self.s[:-self.cpos - 1] + self.s[-self.cpos:]
-
-        self.print_line(self.s, clr=True)
-
-        return n
-
-    def bs_word(self):
-        self.rl_history.reset()
-        pos = len(self.s) - self.cpos - 1
-        deleted = []
-        # First we delete any space to the left of the cursor.
-        while pos >= 0 and self.s[pos] == ' ':
-            deleted.append(self.s[pos])
-            pos -= self.bs()
-        # Then we delete a full word.
-        while pos >= 0 and self.s[pos] != ' ':
-            deleted.append(self.s[pos])
-            pos -= self.bs()
-
-        return ''.join(reversed(deleted))
+        self.cpos += i
+        self.scr.move(y, x - i)
+        if refresh:
+            self.scr.refresh()
+        return True
 
     def check(self):
         """Check if paste mode should still be active and, if not, deactivate
         it and force syntax highlighting."""
-
         if (self.paste_mode
             and time.time() - self.last_key_press > self.config.paste_time):
             self.paste_mode = False
             self.print_line(self.s)
 
-    def clear_current_line(self):
-        """Called when a SyntaxError occured in the interpreter. It is
-        used to prevent autoindentation from occuring after a
-        traceback."""
-        repl.Repl.clear_current_line(self)
-        self.s = ''
+    def is_beginning_of_the_line(self):
+        """Return True or False accordingly if the cursor is at the beginning
+        of the line (whitespace is ignored). This exists so that p_key() knows
+        how to handle the tab key being pressed - if there is nothing but white
+        space before the cursor then process it as a normal tab otherwise
+        attempt tab completion."""
+        return not self.s.lstrip()
 
     def clear_wrapped_lines(self):
         """Clear the wrapped lines of the current input."""
@@ -427,6 +406,319 @@ class CLIRepl(repl.Repl):
         for y in xrange(self.iy + 1, max_y):
             self.scr.move(y, 0)
             self.scr.clrtoeol()
+
+    def echo(self, s, redraw=True):
+        """Parse and echo a formatted string with appropriate attributes. It
+        uses the formatting method as defined in formatter.py to parse the
+        srings. It won't update the screen if it's reevaluating the code (as it
+        does with undo)."""
+        if not py3 and isinstance(s, unicode):
+            s = s.encode(getpreferredencoding())
+
+        a = app.get_colpair('output')
+        if '\x01' in s:
+            rx = re.search('\x01([A-Za-z])([A-Za-z]?)', s)
+            if rx:
+                fg = rx.groups()[0]
+                bg = rx.groups()[1]
+                col_num = self._C[fg.lower()]
+                if bg and bg != 'I':
+                    col_num *= self._C[bg.lower()]
+
+                a = curses.color_pair(int(col_num) + 1)
+                if bg == 'I':
+                    a |= curses.A_REVERSE
+                s = re.sub('\x01[A-Za-z][A-Za-z]?', '', s)
+                if fg.isupper():
+                    a |= curses.A_BOLD
+        s = s.replace('\x03', '')
+        s = s.replace('\x01', '')
+
+        # Replace NUL bytes, as addstr raises an exception otherwise
+        s = s.replace('\0', '')
+        # Replace \r\n bytes, as addstr remove the current line otherwise
+        s = s.replace('\r\n', '\n')
+
+        self.scr.addstr(s, a)
+
+        if redraw:
+            if hasattr(self, 'evaluating') and not getattr(self, 'evaluating'):
+                pass
+            else:
+                self.scr.refresh()
+
+    def print_line(self, s, clr=False, newline=False):
+        """Chuck a line of text through the highlighter, move the cursor
+        to the beginning of the line and output it to the screen."""
+
+        if not s:
+            clr = True
+
+        if self.highlighted_paren is not None:
+            # Clear previous highlighted paren
+            self.reprint_line(*self.highlighted_paren)
+            self.highlighted_paren = None
+
+        if hasattr(self, 'paste_mode') and hasattr(self, 'tokenize') and hasattr(self, 'formatter'):
+            if self.config.syntax and (not self.paste_mode or newline):
+                o = format(self.tokenize(s, newline), self.formatter)
+            else:
+                o = s
+        else:
+            o = s
+
+        self.f_string = o
+        self.scr.move(self.iy, self.ix)
+
+        if clr:
+            self.scr.clrtoeol()
+
+        if clr and not s:
+            self.scr.refresh()
+
+        if o:
+            for t in o.split('\x04'):
+                self.echo(t.rstrip('\n'))
+
+        if self.cpos:
+            t = self.cpos
+            for _ in range(self.cpos):
+                self.mvc(1)
+            self.cpos = t
+
+    def reprint_line(self, lineno, tokens):
+        """Helper function for paren highlighting: Reprint line at offset
+        `lineno` in current input buffer."""
+        if not self.buffer or lineno == len(self.buffer):
+            return
+
+        real_lineno = self.iy
+        height, width = self.scr.getmaxyx()
+        for i in xrange(lineno, len(self.buffer)):
+            string = self.buffer[i]
+            # 4 = length of prompt
+            length = len(string.encode(getpreferredencoding())) + 4
+            real_lineno -= int(math.ceil(length / width))
+        if real_lineno < 0:
+            return
+
+        self.scr.move(real_lineno,
+            len(self.ps1) if lineno == 0 else len(self.ps2))
+        line = format(tokens, BPythonFormatter(self.config.color_scheme))
+        for string in line.split('\x04'):
+            self.echo(string)
+
+    def redraw(self):
+        """Redraw the screen."""
+        self.scr.erase()
+        for k, s in enumerate(self.s_hist):
+            if not s:
+                continue
+            self.iy, self.ix = self.scr.getyx()
+            for i in s.split('\x04'):
+                self.echo(i, redraw=False)
+            if k < len(self.s_hist) -1:
+                self.scr.addstr('\n')
+        self.iy, self.ix = self.scr.getyx()
+        self.print_line(self.s)
+        app.refresh()
+
+    def bs(self, delete_tabs=True):
+        """Process a backspace"""
+        y, x = self.scr.getyx()
+        if not self.s:
+            return
+        if x == self.ix and y == self.iy:
+            return
+        n = 1
+        self.clear_wrapped_lines()
+        if not self.cpos:
+            # I know the nested if blocks look nasty. :(
+            if self.is_beginning_of_the_line() and delete_tabs:
+                n = len(self.s) % self.config.tab_length
+                if not n:
+                    n = self.config.tab_length
+            self.s = self.s[:-n]
+        else:
+            self.s = self.s[:-self.cpos - 1] + self.s[-self.cpos:]
+        self.print_line(self.s, clr=True)
+        return n
+
+    def bs_word(self):
+        if self.cpos == 0 and not self.s:
+            pass
+        else:
+            pos = len(self.s) - self.cpos - 1
+            deleted = []
+            # First we delete any space to the left of the cursor.
+            while pos >= 0 and self.s[pos] == ' ':
+                deleted.append(self.s[pos])
+                pos -= self.bs()
+                # Then we delete a full word.
+            while pos >= 0 and self.s[pos] != ' ':
+                deleted.append(self.s[pos])
+                pos -= self.bs()
+            self.cut_buffer = ''.join(reversed(deleted))
+
+    def cut_to_buffer(self):
+        """Clear from cursor to end of line, placing into cut buffer"""
+        if self.cpos == 0:
+            pass
+        else:
+            self.cut_buffer = self.s[-self.cpos:]
+            self.s = self.s[:-self.cpos]
+            self.cpos = 0
+            self.print_line(self.s, clr=True)
+            self.scr.redrawwin()
+            self.scr.refresh()
+
+    def cut_to_head(self):
+        """Clear from cursor to beginning of line, placing into cut buffer"""
+        if self.cpos == 0:
+            if self.s:
+                self.cut_buffer = self.s
+            else:
+                pass
+        else:
+            self.cut_buffer = self.s[:-self.cpos]
+        self.clear_wrapped_lines()
+        if not self.cpos:
+            self.s = ''
+        else:
+            self.s = self.s[-self.cpos:]
+        self.print_line(self.s, clr=True)
+
+    def delete(self):
+        """Process a del"""
+        if not self.s:
+            return
+
+        if self.mvc(-1):
+            self.bs(False)
+
+    def home(self, refresh=True):
+        self.scr.move(self.iy, self.ix)
+        self.cpos = len(self.s)
+        if refresh:
+            self.scr.refresh()
+        self.print_line(self.s)
+
+    def end(self, refresh=True):
+        self.cpos = 0
+        h, w = gethw()
+        y, x = divmod(len(self.s) + self.ix, w)
+        y += self.iy
+        self.scr.move(y, x)
+        if refresh:
+            self.scr.refresh()
+        self.print_line(self.s)
+
+    def yank_from_buffer(self):
+        """Paste the text from the cut buffer at the current cursor location"""
+        self.addstr(self.cut_buffer)
+        self.print_line(self.s, clr=True)
+
+    def lf(self):
+        """Process a linefeed character; it only needs to check the
+        cursor position and move appropriately so it doesn't clear
+        the current line after the cursor."""
+        if self.cpos:
+            for _ in range(self.cpos):
+                self.mvc(-1)
+
+        # Reprint the line (as there was maybe a highlighted paren in it)
+        self.print_line(self.s, newline=True)
+        self.echo("\n")
+
+
+class CLIRepl(repl.Repl, EditableMixin):
+    def __init__(self, scr, interp, config):
+        repl.Repl.__init__(self, interp, config)
+        EditableMixin.__init__(self, scr, config)
+        self.interp.writetb = self.writetb
+        self.list_win = app.newwin(1, 1, 1, 1)
+        self.exit_value = ()
+        self.f_string = ''
+        self.in_hist = False
+        self.formatter = BPythonFormatter(config.color_scheme)
+        self.interact = CLIInteraction(self.config, statusbar=app.statusbar)
+
+        if config.cli_suggestion_width <= 0 or config.cli_suggestion_width > 1:
+            config.cli_suggestion_width = 0.8
+
+    def current_line(self):
+        """Return the current line."""
+        return self.s
+
+    def clear_current_line(self):
+        """Called when a SyntaxError occured in the interpreter. It is
+        used to prevent autoindentation from occuring after a
+        traceback."""
+        self.s = ''
+
+    def current_word(self):
+        """Return the current word, i.e. the (incomplete) word directly to the
+        left of the cursor"""
+
+        # I don't know if autocomplete should be disabled if the cursor
+        # isn't at the end of the line, but that's what this does for now.
+        if self.cpos: return
+
+        # look from right to left for a bad method character
+        l = len(self.s)
+        is_method_char = lambda c: c.isalnum() or c in ('.', '_')
+
+        if not self.s or not is_method_char(self.s[l-1]):
+            return
+
+        for i in range(1, l+1):
+            if not is_method_char(self.s[-i]):
+                i -= 1
+                break
+
+        return self.s[-i:]
+
+    def addstr(self, s):
+        """Add a string to the current input line and figure out
+        where it should go, depending on the cursor position."""
+        self.rl_history.reset()
+        EditableMixin.addstr(self, s)
+        self.complete()
+
+    def bs(self, delete_tabs=True):
+        """Process a backspace"""
+        self.rl_history.reset()
+        result = EditableMixin.bs(self, delete_tabs=delete_tabs)
+        self.complete()
+        return result
+
+    def bs_word(self):
+        self.rl_history.reset()
+        result = EditableMixin.bs_word(self)
+        self.complete()
+        return result
+
+    def cut_to_head(self):
+        EditableMixin.cut_to_head(self)
+        self.scr.redrawwin()
+        self.scr.refresh()
+
+    def get_line(self):
+        """Get a line of text and return it
+        This function initialises an empty string and gets the
+        curses cursor position on the screen and stores it
+        for the echo() function to use later (I think).
+        Then it waits for key presses and passes them to p_key(),
+        which returns None if Enter is pressed (that means "Return",
+        idiot)."""
+        self.rl_history.reset()
+        self.s = ''
+        self.iy, self.ix = self.scr.getyx()
+        if not self.paste_mode:
+            for _ in xrange(self.next_indentation()):
+                self.p_key('\t')
+        self.cpos = 0
+        return EditableMixin.get_line(self)
 
     def complete(self, tab=False):
         """Get Autcomplete list and window."""
@@ -457,110 +749,6 @@ class CLIRepl(repl.Repl):
             if not self.list_win_visible:
                 self.scr.redrawwin()
                 self.scr.refresh()
-
-    def clrtobol(self):
-        """Clear from cursor to beginning of line; usual C-u behaviour"""
-        self.clear_wrapped_lines()
-
-        if not self.cpos:
-            self.s = ''
-        else:
-            self.s = self.s[-self.cpos:]
-
-        self.print_line(self.s, clr=True)
-        self.scr.redrawwin()
-        self.scr.refresh()
-
-    def current_line(self):
-        """Return the current line."""
-        return self.s
-
-    def cut_to_buffer(self):
-        """Clear from cursor to end of line, placing into cut buffer"""
-        self.cut_buffer = self.s[-self.cpos:]
-        self.s = self.s[:-self.cpos]
-        self.cpos = 0
-        self.print_line(self.s, clr=True)
-        self.scr.redrawwin()
-        self.scr.refresh()
-
-    def cw(self):
-        """Return the current word, i.e. the (incomplete) word directly to the
-        left of the cursor"""
-
-        # I don't know if autocomplete should be disabled if the cursor
-        # isn't at the end of the line, but that's what this does for now.
-        if self.cpos: return
-
-        # look from right to left for a bad method character
-        l = len(self.s)
-        is_method_char = lambda c: c.isalnum() or c in ('.', '_')
-
-        if not self.s or not is_method_char(self.s[l-1]):
-            return
-
-        for i in range(1, l+1):
-            if not is_method_char(self.s[-i]):
-                i -= 1
-                break
-
-        return self.s[-i:]
-
-    def delete(self):
-        """Process a del"""
-        if not self.s:
-            return
-
-        if self.mvc(-1):
-            self.bs(False)
-
-    def echo(self, s, redraw=True):
-        """Parse and echo a formatted string with appropriate attributes. It
-        uses the formatting method as defined in formatter.py to parse the
-        srings. It won't update the screen if it's reevaluating the code (as it
-        does with undo)."""
-        if not py3 and isinstance(s, unicode):
-            s = s.encode(getpreferredencoding())
-
-        a = get_colpair(self.config, 'output')
-        if '\x01' in s:
-            rx = re.search('\x01([A-Za-z])([A-Za-z]?)', s)
-            if rx:
-                fg = rx.groups()[0]
-                bg = rx.groups()[1]
-                col_num = self._C[fg.lower()]
-                if bg and bg != 'I':
-                    col_num *= self._C[bg.lower()]
-
-                a = curses.color_pair(int(col_num) + 1)
-                if bg == 'I':
-                    a = a | curses.A_REVERSE
-                s = re.sub('\x01[A-Za-z][A-Za-z]?', '', s)
-                if fg.isupper():
-                    a = a | curses.A_BOLD
-        s = s.replace('\x03', '')
-        s = s.replace('\x01', '')
-
-        # Replace NUL bytes, as addstr raises an exception otherwise
-        s = s.replace('\0', '')
-        # Replace \r\n bytes, as addstr remove the current line otherwise
-        s = s.replace('\r\n', '\n')
-
-        self.scr.addstr(s, a)
-
-        if redraw and not self.evaluating:
-            self.scr.refresh()
-
-    def end(self, refresh=True):
-        self.cpos = 0
-        h, w = gethw()
-        y, x = divmod(len(self.s) + self.ix, w)
-        y += self.iy
-        self.scr.move(y, x)
-        if refresh:
-            self.scr.refresh()
-
-        return True
 
     def hbegin(self):
         """Replace the active line with first line in history and
@@ -600,100 +788,11 @@ class CLIRepl(repl.Repl):
 
     def search(self):
         """Search with the partial matches from the history object."""
-
         self.cpo = 0
         self.clear_wrapped_lines()
         self.rl_history.enter(self.s)
         self.s = self.rl_history.back(start=False, search=True)
         self.print_line(self.s, clr=True)
-
-    def get_key(self):
-        key = ''
-        while True:
-            try:
-                key += self.scr.getkey()
-                if py3:
-                    # Seems like we get a in the locale's encoding
-                    # encoded string in Python 3 as well, but of
-                    # type str instead of bytes, hence convert it to
-                    # bytes first and decode then
-                    key = key.encode('latin-1').decode(getpreferredencoding())
-                else:
-                    key = key.decode(getpreferredencoding())
-                self.scr.nodelay(False)
-            except UnicodeDecodeError:
-                # Yes, that actually kind of sucks, but I don't see another way to get
-                # input right
-                self.scr.nodelay(True)
-            except curses.error:
-                # I'm quite annoyed with the ambiguity of this exception handler. I previously
-                # caught "curses.error, x" and accessed x.message and checked that it was "no
-                # input", which seemed a crappy way of doing it. But then I ran it on a
-                # different computer and the exception seems to have entirely different
-                # attributes. So let's hope getkey() doesn't raise any other crazy curses
-                # exceptions. :)
-                self.scr.nodelay(False)
-                # XXX What to do here? Raise an exception?
-                if key:
-                    return key
-            else:
-                if key != '\x00':
-                    t = time.time()
-                    self.paste_mode = (
-                        t - self.last_key_press <= self.config.paste_time
-                    )
-                    self.last_key_press = t
-                    return key
-                else:
-                    key = ''
-            finally:
-                if self.idle:
-                    self.idle(self)
-
-    def get_line(self):
-        """Get a line of text and return it
-        This function initialises an empty string and gets the
-        curses cursor position on the screen and stores it
-        for the echo() function to use later (I think).
-        Then it waits for key presses and passes them to p_key(),
-        which returns None if Enter is pressed (that means "Return",
-        idiot)."""
-
-        self.s = ''
-        self.rl_history.reset()
-        self.iy, self.ix = self.scr.getyx()
-
-        if not self.paste_mode:
-            for _ in xrange(self.next_indentation()):
-                self.p_key('\t')
-
-        self.cpos = 0
-
-        while True:
-            key = self.get_key()
-            if self.p_key(key) is None:
-                if self.config.cli_trim_prompts and self.s.startswith(">>> "):
-                    self.s = self.s[4:]
-                return self.s
-
-    def home(self, refresh=True):
-        self.scr.move(self.iy, self.ix)
-        self.cpos = len(self.s)
-        if refresh:
-            self.scr.refresh()
-        return True
-
-    def lf(self):
-        """Process a linefeed character; it only needs to check the
-        cursor position and move appropriately so it doesn't clear
-        the current line after the cursor."""
-        if self.cpos:
-            for _ in range(self.cpos):
-                self.mvc(-1)
-
-        # Reprint the line (as there was maybe a highlighted paren in it)
-        self.print_line(self.s, newline=True)
-        self.echo("\n")
 
     def mkargspec(self, topline, down):
         """This figures out what to do with the argspec and puts it nicely into
@@ -720,14 +819,14 @@ class CLIRepl(repl.Repl):
 
         self.list_win.addstr('\n  ')
         self.list_win.addstr(fn,
-            get_colpair(self.config, 'name') | curses.A_BOLD)
-        self.list_win.addstr(': (', get_colpair(self.config, 'name'))
+            app.get_colpair('name') | curses.A_BOLD)
+        self.list_win.addstr(': (', app.get_colpair('name'))
         maxh = self.scr.getmaxyx()[0]
 
         if is_bound_method and isinstance(in_arg, int):
             in_arg += 1
 
-        punctuation_colpair = get_colpair(self.config, 'punctuation')
+        punctuation_colpair = app.get_colpair('punctuation')
 
         for k, i in enumerate(args):
             y, x = self.list_win.getyx()
@@ -752,9 +851,9 @@ class CLIRepl(repl.Repl):
                 self.list_win.addstr('\n\t')
 
             if str(i) == 'self' and k == 0:
-                color = get_colpair(self.config, 'name')
+                color = app.get_colpair('name')
             else:
-                color = get_colpair(self.config, 'token')
+                color = app.get_colpair('token')
 
             if k == in_arg or i == in_arg:
                 color |= curses.A_BOLD
@@ -768,7 +867,7 @@ class CLIRepl(repl.Repl):
                 self.list_win.addstr(str(i), color)
             if kw is not None:
                 self.list_win.addstr('=', punctuation_colpair)
-                self.list_win.addstr(kw, get_colpair(self.config, 'token'))
+                self.list_win.addstr(kw, app.get_colpair('token'))
             if k != len(args) -1:
                 self.list_win.addstr(', ', punctuation_colpair)
 
@@ -776,7 +875,7 @@ class CLIRepl(repl.Repl):
             if args:
                 self.list_win.addstr(', ', punctuation_colpair)
             self.list_win.addstr('*%s' % (_args, ),
-                                 get_colpair(self.config, 'token'))
+                                 app.get_colpair('token'))
 
         if py3 and kwonly:
             if not _args:
@@ -786,7 +885,7 @@ class CLIRepl(repl.Repl):
             marker = object()
             for arg in kwonly:
                 self.list_win.addstr(', ', punctuation_colpair)
-                color = get_colpair(self.config, 'token')
+                color = app.get_colpair('token')
                 if arg == in_arg:
                     color |= curses.A_BOLD
                 self.list_win.addstr(arg, color)
@@ -794,88 +893,15 @@ class CLIRepl(repl.Repl):
                 if default is not marker:
                     self.list_win.addstr('=', punctuation_colpair)
                     self.list_win.addstr(repr(default),
-                                         get_colpair(self.config, 'token'))
+                                         app.get_colpair('token'))
 
         if _kwargs:
             if args or _args or (py3 and kwonly):
                 self.list_win.addstr(', ', punctuation_colpair)
             self.list_win.addstr('**%s' % (_kwargs, ),
-                                 get_colpair(self.config, 'token'))
+                                 app.get_colpair('token'))
         self.list_win.addstr(')', punctuation_colpair)
-
         return r
-
-    def mvc(self, i, refresh=True):
-        """This method moves the cursor relatively from the current
-        position, where:
-            0 == (right) end of current line
-            length of current line len(self.s) == beginning of current line
-        and:
-            current cursor position + i
-            for positive values of i the cursor will move towards the beginning
-            of the line, negative values the opposite."""
-        y, x = self.scr.getyx()
-
-        if self.cpos == 0 and i < 0:
-            return False
-
-        if x == self.ix and y == self.iy and i >= 1:
-            return False
-
-        h, w = gethw()
-        if x - i < 0:
-            y -= 1
-            x = w
-
-        if x - i >= w:
-            y += 1
-            x = 0 + i
-
-        self.cpos += i
-        self.scr.move(y, x - i)
-        if refresh:
-            self.scr.refresh()
-
-        return True
-
-    def p_key(self, key):
-        return self.key_dispatcher.run(key)
-
-    def print_line(self, s, clr=False, newline=False):
-        """Chuck a line of text through the highlighter, move the cursor
-        to the beginning of the line and output it to the screen."""
-
-        if not s:
-            clr = True
-
-        if self.highlighted_paren is not None:
-            # Clear previous highlighted paren
-            self.reprint_line(*self.highlighted_paren)
-            self.highlighted_paren = None
-
-        if self.config.syntax and (not self.paste_mode or newline):
-            o = format(self.tokenize(s, newline), self.formatter)
-        else:
-            o = s
-
-        self.f_string = o
-        self.scr.move(self.iy, self.ix)
-
-        if clr:
-            self.scr.clrtoeol()
-
-        if clr and not s:
-            self.scr.refresh()
-
-        if o:
-            for t in o.split('\x04'):
-                self.echo(t.rstrip('\n'))
-
-        if self.cpos:
-            t = self.cpos
-            for _ in range(self.cpos):
-                self.mvc(1)
-            self.cpos = t
 
     def prompt(self, more):
         """Show the appropriate Python prompt"""
@@ -904,23 +930,7 @@ class CLIRepl(repl.Repl):
         finally:
             curses.raw(True)
 
-    def redraw(self):
-        """Redraw the screen."""
-        self.scr.erase()
-        for k, s in enumerate(self.s_hist):
-            if not s:
-                continue
-            self.iy, self.ix = self.scr.getyx()
-            for i in s.split('\x04'):
-                self.echo(i, redraw=False)
-            if k < len(self.s_hist) -1:
-                self.scr.addstr('\n')
-        self.iy, self.ix = self.scr.getyx()
-        self.print_line(self.s)
-        self.scr.refresh()
-        self.statusbar.refresh()
-
-    def repl(self):
+    def run(self):
         """Initialise the repl and jump into the loop. This method also has to
         keep a stack of lines entered for the horrible "undo" feature. It also
         tracks everything that would normally go to stdout in the normal Python
@@ -932,7 +942,6 @@ class CLIRepl(repl.Repl):
         # Use our own helper function because Python's will use real stdin and
         # stdout instead of our wrapped
         self.push('from bpython._internal import _help as help\n', False)
-
         self.iy, self.ix = self.scr.getyx()
         more = False
         while not self.do_exit:
@@ -941,7 +950,7 @@ class CLIRepl(repl.Repl):
             try:
                 inp = self.get_line()
             except KeyboardInterrupt:
-                self.statusbar.message('KeyboardInterrupt')
+                app.statusbar.message('KeyboardInterrupt')
                 self.scr.addstr('\n')
                 self.scr.touchwin()
                 self.scr.refresh()
@@ -962,28 +971,6 @@ class CLIRepl(repl.Repl):
                 self.s = ''
         return self.exit_value
 
-    def reprint_line(self, lineno, tokens):
-        """Helper function for paren highlighting: Reprint line at offset
-        `lineno` in current input buffer."""
-        if not self.buffer or lineno == len(self.buffer):
-            return
-
-        real_lineno = self.iy
-        height, width = self.scr.getmaxyx()
-        for i in xrange(lineno, len(self.buffer)):
-            string = self.buffer[i]
-            # 4 = length of prompt
-            length = len(string.encode(getpreferredencoding())) + 4
-            real_lineno -= int(math.ceil(length / width))
-        if real_lineno < 0:
-            return
-
-        self.scr.move(real_lineno,
-                      len(self.ps1) if lineno == 0 else len(self.ps2))
-        line = format(tokens, BPythonFormatter(self.config.color_scheme))
-        for string in line.split('\x04'):
-            self.echo(string)
-
     def resize(self):
         """This method exists simply to keep it straight forward when
         initialising a window and resizing it."""
@@ -991,14 +978,13 @@ class CLIRepl(repl.Repl):
         self.scr.erase()
         self.scr.resize(self.h, self.w)
         self.scr.mvwin(self.y, self.x)
-        self.statusbar.resize(refresh=False)
+        app.statusbar.resize(refresh=False)
         self.redraw()
 
     def reevaluate(self):
         """Clear the buffer, redraw the screen and re-evaluate the history"""
-
         self.evaluating = True
-        self.stdout_history.reset()
+        self.stdout_history.entries = []
         self.f_string = ''
         self.buffer = []
         self.scr.erase()
@@ -1054,7 +1040,6 @@ class CLIRepl(repl.Repl):
 
         self.echo(s)
         self.s_hist.append(s.rstrip())
-
 
     def show_list(self, items, topline=None, current_item=None):
         shared = Struct()
@@ -1139,7 +1124,7 @@ class CLIRepl(repl.Repl):
             w = t
 
         if height_offset and display_rows + 5 >= max_h:
-            del v_items[-(cols * (height_offset)):]
+            del v_items[-(cols * height_offset):]
 
         if self.docstring is None:
             self.list_win.resize(rows + 2, w)
@@ -1163,9 +1148,9 @@ class CLIRepl(repl.Repl):
         for ix, i in enumerate(v_items):
             padding = (wl - len(i)) * ' '
             if i == current_item:
-                color = get_colpair(self.config, 'operator')
+                color = app.get_colpair('operator')
             else:
-                color = get_colpair(self.config, 'main')
+                color = app.get_colpair('main')
             if not py3:
                 i = i.encode(encoding)
             self.list_win.addstr(i + padding, color)
@@ -1177,7 +1162,7 @@ class CLIRepl(repl.Repl):
             if not py3 and isinstance(docstring_string, unicode):
                 docstring_string = docstring_string.encode(encoding, 'ignore')
             self.list_win.addstr('\n' + docstring_string,
-                                 get_colpair(self.config, 'comment'))
+                                 app.get_colpair('comment'))
             # XXX: After all the trouble I had with sizing the list box (I'm not very good
             # at that type of thing) I decided to do this bit of tidying up here just to
             # make sure there's no unnececessary blank lines, it makes things look nicer.
@@ -1185,9 +1170,9 @@ class CLIRepl(repl.Repl):
         y = self.list_win.getyx()[0]
         self.list_win.resize(y + 2, w)
 
-        self.statusbar.win.touchwin()
-        self.statusbar.win.noutrefresh()
-        self.list_win.attron(get_colpair(self.config, 'main'))
+        app.statusbar.scr.touchwin()
+        app.statusbar.scr.noutrefresh()
+        self.list_win.attron(app.get_colpair('main'))
         self.list_win.border()
         self.scr.touchwin()
         self.scr.cursyncup()
@@ -1202,12 +1187,11 @@ class CLIRepl(repl.Repl):
     def size(self):
         """Set instance attributes for x and y top left corner coordinates
         and width and heigth for the window."""
-        global stdscr
-        h, w = stdscr.getmaxyx()
+        h, w = app.scr.getmaxyx()
+        self.x = 0
         self.y = 0
         self.w = w
         self.h = h - 1
-        self.x = 0
 
     def suspend(self):
         """Suspend the current process for shell job control."""
@@ -1230,7 +1214,7 @@ class CLIRepl(repl.Repl):
         mode = self.config.autocomplete_mode
 
         # 1. check if we should add a tab character
-        if self.atbol() and not back:
+        if self.is_beginning_of_the_line() and not back:
             x_pos = len(self.s) - self.cpos
             num_spaces = x_pos % self.config.tab_length
             if not num_spaces:
@@ -1246,24 +1230,24 @@ class CLIRepl(repl.Repl):
             if not self.config.auto_display_list and not self.list_win_visible:
                 return True
 
-            cw = self.current_string() or self.cw()
-            if not cw:
+            current_word = self.current_string() or self.current_word()
+            if not current_word:
                 return True
         else:
-            cw = self.matches_iter.current_word
+            current_word = self.matches_iter.current_word
 
         # 3. check to see if we can expand the current word
         cseq = None
         if mode == autocomplete.SUBSTRING:
-            if all([len(match.split(cw)) == 2 for match in self.matches]):
-                seq = [cw + match.split(cw)[1] for match in self.matches]
+            if all([len(match.split(current_word)) == 2 for match in self.matches]):
+                seq = [current_word + match.split(current_word)[1] for match in self.matches]
                 cseq = os.path.commonprefix(seq)
         else:
             seq = self.matches
             cseq = os.path.commonprefix(seq)
 
         if cseq and mode != autocomplete.FUZZY:
-            expanded_string = cseq[len(cw):]
+            expanded_string = cseq[len(current_word):]
             self.s += expanded_string
             expanded = bool(expanded_string)
             self.print_line(self.s)
@@ -1278,7 +1262,7 @@ class CLIRepl(repl.Repl):
         if not expanded and self.matches:
             # reset s if this is the nth result
             if self.matches_iter:
-                self.s = self.s[:-len(self.matches_iter.current())] + cw
+                self.s = self.s[:-len(self.matches_iter.current())] + current_word
 
             current_match = back and self.matches_iter.previous() \
                                   or self.matches_iter.next()
@@ -1295,9 +1279,9 @@ class CLIRepl(repl.Repl):
                     self.list_win.refresh()
 
                 if self.config.autocomplete_mode == autocomplete.SIMPLE:
-                    self.s += current_match[len(cw):]
+                    self.s += current_match[len(current_word):]
                 else:
-                    self.s = self.s[:-len(cw)] + current_match
+                    self.s = self.s[:-len(current_word)] + current_match
 
                 self.print_line(self.s, True)
         return True
@@ -1313,13 +1297,104 @@ class CLIRepl(repl.Repl):
             self.write('\x01%s\x03%s' % (self.config.color_scheme['error'],
                                          line))
 
-    def yank_from_buffer(self):
-        """Paste the text from the cut buffer at the current cursor location"""
-        self.addstr(self.cut_buffer)
-        self.print_line(self.s, clr=True)
+    def tokenize(self, s, newline=False):
+        """Tokenize a line of code."""
+
+        source = '\n'.join(self.buffer + [s])
+        cursor = len(source) - self.cpos
+        if self.cpos:
+            cursor += 1
+        stack = list()
+        all_tokens = list(PythonLexer().get_tokens(source))
+        # Unfortunately, Pygments adds a trailing newline and strings with
+        # no size, so strip them
+        while not all_tokens[-1][1]:
+            all_tokens.pop()
+        all_tokens[-1] = (all_tokens[-1][0], all_tokens[-1][1].rstrip('\n'))
+        line = pos = 0
+        parens = dict(zip('{([', '})]'))
+        line_tokens = list()
+        saved_tokens = list()
+        search_for_paren = True
+        for (token, value) in self._split_lines(all_tokens):
+            pos += len(value)
+            if token is Token.Text and value == '\n':
+                line += 1
+                # Remove trailing newline
+                line_tokens = list()
+                saved_tokens = list()
+                continue
+            line_tokens.append((token, value))
+            saved_tokens.append((token, value))
+            if not search_for_paren:
+                continue
+            under_cursor = (pos == cursor)
+            if token is Token.Punctuation:
+                if value in parens:
+                    if under_cursor:
+                        line_tokens[-1] = (Parenthesis.UnderCursor, value)
+                        # Push marker on the stack
+                        stack.append((Parenthesis, value))
+                    else:
+                        stack.append((line, len(line_tokens) - 1,
+                                      line_tokens, value))
+                elif value in parens.itervalues():
+                    saved_stack = list(stack)
+                    try:
+                        while True:
+                            opening = stack.pop()
+                            if parens[opening[-1]] == value:
+                                break
+                    except IndexError:
+                        # SyntaxError.. more closed parentheses than
+                        # opened or a wrong closing paren
+                        opening = None
+                        if not saved_stack:
+                            search_for_paren = False
+                        else:
+                            stack = saved_stack
+                    if opening and opening[0] is Parenthesis:
+                        # Marker found
+                        line_tokens[-1] = (Parenthesis, value)
+                        search_for_paren = False
+                    elif opening and under_cursor and not newline:
+                        if self.cpos:
+                            line_tokens[-1] = (Parenthesis.UnderCursor, value)
+                        else:
+                            # The cursor is at the end of line and next to
+                            # the paren, so it doesn't reverse the paren.
+                            # Therefore, we insert the Parenthesis token
+                            # here instead of the Parenthesis.UnderCursor
+                            # token.
+                            line_tokens[-1] = (Parenthesis, value)
+                        (lineno, i, tokens, opening) = opening
+                        if lineno == len(self.buffer):
+                            self.highlighted_paren = (lineno, saved_tokens)
+                            line_tokens[i] = (Parenthesis, opening)
+                        else:
+                            self.highlighted_paren = (lineno, list(tokens))
+                            # We need to redraw a line
+                            tokens[i] = (Parenthesis, opening)
+                            self.reprint_line(lineno, tokens)
+                        search_for_paren = False
+                elif under_cursor:
+                    search_for_paren = False
+        if line != len(self.buffer):
+            return list()
+        return line_tokens
+
+    def _split_lines(self, tokens):
+        for (token, value) in tokens:
+            if not value:
+                continue
+            while value:
+                head, newline, value = value.partition('\n')
+                yield (token, head)
+                if newline:
+                    yield (Token.Text, newline)
 
 
-class Statusbar(object):
+class Statusbar(EditableMixin):
     """This class provides the status bar at the bottom of the screen.
     It has message() and prompt() methods for user interactivity, as
     well as settext() and clear() methods for changing its appearance.
@@ -1329,13 +1404,13 @@ class Statusbar(object):
     has been called (it'll display for a couple of seconds and then disappear).
 
     It should be called as:
-        foo = Statusbar(stdscr, scr, 'Initial text to display')
+        foo = Statusbar(scr, 'Initial text to display')
     or, for a blank statusbar:
-        foo = Statusbar(stdscr, scr)
+        foo = Statusbar(scr)
 
     It can also receive the argument 'c' which will be an integer referring
     to a curses colour pair, e.g.:
-        foo = Statusbar(stdscr, 'Hello', c=4)
+        foo = Statusbar(scr, 'Hello', c=4)
 
     stdscr should be a curses window object in which to put the status bar.
     pwin should be the parent window. To be honest, this is only really here
@@ -1343,20 +1418,15 @@ class Statusbar(object):
 
     """
 
-    def __init__(self, scr, pwin, background, config, s=None, c=None):
+    def __init__(self, scr, config, color=None):
         """Initialise the statusbar and display the initial text (if any)"""
+        EditableMixin.__init__(self, scr, config)
         self.size()
-        self.win = newwin(background, self.h, self.w, self.y, self.x)
 
-        self.config = config
-
-        self.s = s or ''
-        if s:
-            self._s = self.s
-        self.c = c
+        self.s = ''
+        self.c = color
         self.timer = 0
-        self.pwin = pwin
-        self.settext(self._s, c)
+        self.settext(self._s, color)
 
     @property
     def _s(self):
@@ -1365,18 +1435,19 @@ class Statusbar(object):
     def size(self):
         """Set instance attributes for x and y top left corner coordinates
         and width and heigth for the window."""
-        h, w = gethw()
-        self.y = h - 1
-        self.w = w
+        h, w = App.gethw()
+        y, x = app.scr.getyx()
         self.h = 1
+        self.w = w
+        self.y = h - 1
         self.x = 0
 
     def resize(self, refresh=True):
         """This method exists simply to keep it straight forward when
         initialising a window and resizing it."""
         self.size()
-        self.win.mvwin(self.y, self.x)
-        self.win.resize(self.h, self.w)
+        self.scr.mvwin(self.y, self.x)
+        self.scr.resize(self.h, self.w)
         if refresh:
             self.refresh()
 
@@ -1408,39 +1479,12 @@ class Statusbar(object):
         value."""
 
         self.settext(s or '? ', p=True)
-        iy, ix = self.win.getyx()
+        self.iy, self.ix = self.scr.getyx()
 
-        def bs(s):
-            y, x = self.win.getyx()
-            if x == ix:
-                return s
-            s = s[:-1]
-            self.win.delch(y, x - 1)
-            self.win.move(y, x - 1)
-            return s
-
-        o = ''
-        while True:
-            c = self.get_key()
-
-            # '\b'
-            if c == chr(127):
-                o = bs(o)
-            # '\n'
-            elif c == chr(10):
-                break
-            # ESC
-            elif c == chr(27):
-                curses.flushinp()
-                raise ValueError
-            # literal
-            else:
-                if len(c) == 1 and not unicodedata.category(c) == 'Cc':
-                    self.win.addstr(c.encode(sys.__stdout__.encoding), get_colpair(self.config, 'prompt'))
-                    o += c
-
+        result = self.get_line()
         self.settext(self._s)
-        return o
+        return result
+#        return o
 
     def settext(self, s, c=None, p=False):
         """Set the text on the status bar to a new permanent value; this is the
@@ -1449,11 +1493,11 @@ class Statusbar(object):
         pair will be used).  p is True if the cursor is expected to stay in the
         status window (e.g. when prompting)."""
 
-        self.win.erase()
+        self.scr.erase()
         if len(s) >= self.w:
             s = s[:self.w - 1]
 
-        self.s = s
+        self.s = ""
         if c:
             self.c = c
 
@@ -1462,209 +1506,275 @@ class Statusbar(object):
                 s = s.encode(getpreferredencoding())
 
             if self.c:
-                self.win.addstr(s, self.c)
+                self.scr.addstr(s, self.c)
             else:
-                self.win.addstr(s)
+                self.scr.addstr(s)
 
         if not p:
-            self.win.noutrefresh()
-            self.pwin.refresh()
+            self.scr.noutrefresh()
+            if hasattr(app, 'clirepl'):
+                app.clirepl.scr.refresh()
         else:
-            self.win.refresh()
+            self.scr.refresh()
 
     def clear(self):
         """Clear the status bar."""
-        self.win.clear()
-
-    def get_key(self):
-        key = ''
-        while True:
-            try:
-                key += self.win.getkey()
-                if py3:
-                    # Seems like we get a in the locale's encoding
-                    # encoded string in Python 3 as well, but of
-                    # type str instead of bytes, hence convert it to
-                    # bytes first and decode then
-                    key = key.encode('latin-1').decode(getpreferredencoding())
-                else:
-                    key = key.decode(getpreferredencoding())
-                self.win.nodelay(False)
-            except UnicodeDecodeError:
-                # Yes, that actually kind of sucks, but I don't see another way to get
-                # input right
-                self.win.nodelay(True)
-            except curses.error:
-                # I'm quite annoyed with the ambiguity of this exception handler. I previously
-                # caught "curses.error, x" and accessed x.message and checked that it was "no
-                # input", which seemed a crappy way of doing it. But then I ran it on a
-                # different computer and the exception seems to have entirely different
-                # attributes. So let's hope getkey() doesn't raise any other crazy curses
-                # exceptions. :)
-                self.win.nodelay(False)
-                # XXX What to do here? Raise an exception?
-                if key:
-                    return key
-            else:
-                if key != '\x00':
-                    return key
-                else:
-                    key = ''
-
-def init_wins(scr, config):
-    """Initialise the two windows (the main repl interface and the little
-    status bar at the bottom with some stuff in it)"""
-    #TODO: Document better what stuff is on the status bar.
-
-    background = get_colpair(config, 'background')
-    h, w = gethw()
-
-    main_win = newwin(background, h - 1, w, 0, 0)
-    main_win.scrollok(True)
-    main_win.keypad(1)
-    # Thanks to Angus Gibson for pointing out this missing line which was causing
-    # problems that needed dirty hackery to fix. :)
-
-    statusbar = Statusbar(scr, main_win, background, config, None, get_colpair(config, 'main'))
-
-    return main_win, statusbar
+        self.scr.clear()
 
 
-def sigwinch(unused_scr):
-    global DO_RESIZE
-    DO_RESIZE = True
-
-def sigcont(unused_scr):
-    sigwinch(unused_scr)
-    # Forces the redraw
-    curses.ungetch('\x00')
-
-def gethw():
-    """I found this code on a usenet post, and snipped out the bit I needed,
-    so thanks to whoever wrote that, sorry I forgot your name, I'm sure you're
-    a great guy.
-
-    It's unfortunately necessary (unless someone has any better ideas) in order
-    to allow curses and readline to work together. I looked at the code for
-    libreadline and noticed this comment:
-
-        /* This is the stuff that is hard for me.  I never seem to write good
-           display routines in C.  Let's see how I do this time. */
-
-    So I'm not going to ask any questions.
-
-    """
-
-    if platform.system() != 'Windows':
-        h, w = struct.unpack(
-            "hhhh",
-            fcntl.ioctl(sys.__stdout__, termios.TIOCGWINSZ, "\000" * 8))[0:2]
-    else:
-        from ctypes import windll, create_string_buffer
-
-        # stdin handle is -10
-        # stdout handle is -11
-        # stderr handle is -12
-
-        h = windll.kernel32.GetStdHandle(-12)
-        csbi = create_string_buffer(22)
-        res = windll.kernel32.GetConsoleScreenBufferInfo(h, csbi)
-
-        if res:
-            (bufx, bufy, curx, cury, wattr,
-             left, top, right, bottom, maxx, maxy) = struct.unpack("hhhhHhhhhhh", csbi.raw)
-            sizex = right - left + 1
-            sizey = bottom - top + 1
-        else:
-            sizex, sizey = stdscr.getmaxyx()# can't determine actual size - return default values
-
-        h, w = sizey, sizex
-    return h, w
-
-
-def idle(caller):
-    """This is called once every iteration through the getkey()
-    loop (currently in the Repl class, see the get_line() method).
-    The statusbar check needs to go here to take care of timed
-    messages and the resize handlers need to be here to make
-    sure it happens conveniently."""
-    global DO_RESIZE
-
-    if importcompletion.find_coroutine() or caller.paste_mode:
-        caller.scr.nodelay(True)
-        key = caller.scr.getch()
-        caller.scr.nodelay(False)
-        if key != -1:
-            curses.ungetch(key)
-        else:
-            curses.ungetch('\x00')
-    caller.statusbar.check()
-    caller.check()
-
-    if DO_RESIZE:
-        do_resize(caller)
-
-
-def do_resize(caller):
-    """This needs to hack around readline and curses not playing
-    nicely together. See also gethw() above."""
-    global DO_RESIZE
-    h, w = gethw()
-    if not h:
-    # Hopefully this shouldn't happen. :)
-        return
-
-    curses.endwin()
-    os.environ["LINES"] = str(h)
-    os.environ["COLUMNS"] = str(w)
-    curses.doupdate()
+class App(object):
     DO_RESIZE = False
+    def __init__(self, scr, locals_, config):
+        global app
+        app = self
 
-    caller.resize()
-    # The list win resizes itself every time it appears so no need to do it here.
+        self.scr = scr
+        self.config = config
 
+        self.set_colors()
+        main_win, status_win = self.init_wins()
 
-class FakeDict(object):
-    """Very simple dict-alike that returns a constant value for any key -
-    used as a hacky solution to using a colours dict containing colour codes if
-    colour initialisation fails."""
+        self.statusbar = Statusbar(status_win, self.config, color=app.get_colpair('main'))
 
-    def __init__(self, val):
-        self._val = val
+        if locals_ is None:
+            sys.modules['__main__'] = ModuleType('__main__')
+            locals_ = sys.modules['__main__'].__dict__
+        self.interpreter = repl.Interpreter(locals_, getpreferredencoding())
 
-    def __getitem__(self, k):
-        return self._val
+        self.clirepl = CLIRepl(main_win, self.interpreter, config)
+        self.clirepl._C = self.colors
 
+    def __enter__(self):
+        if platform.system() != 'Windows':
+            self.old_sigwinch_handler = signal.signal(signal.SIGWINCH,
+                lambda *_: App.sigwinch(self.scr))
+            # redraw window after being suspended
+            self.old_sigcont_handler = signal.signal(signal.SIGCONT, lambda *_: App.sigcont(self.scr))
 
-def newwin(background, *args):
-    """Wrapper for curses.newwin to automatically set background colour on any
-    newly created window."""
-    win = curses.newwin(*args)
-    win.bkgd(' ', background)
-    return win
+        sys.stdin = FakeStdin(self.clirepl)
+        sys.stdout = FakeStream(self.clirepl)
+        sys.stderr = FakeStream(self.clirepl)
 
+        curses.raw(True)
+        return self
 
-def curses_wrapper(func, *args, **kwargs):
-    """Like curses.wrapper(), but reuses stdscr when called again."""
-    global stdscr
-    if stdscr is None:
-        stdscr = curses.initscr()
-    try:
-        curses.noecho()
-        curses.cbreak()
-        stdscr.keypad(1)
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.clirepl.scr.clear()
+        self.clirepl.scr.refresh()
+        self.statusbar.scr.clear()
+        self.statusbar.scr.refresh()
+        curses.raw(False)
 
-        try:
-            curses.start_color()
-        except curses.error:
-            pass
+        sys.stdin = sys.__stdin__
+        sys.stderr = sys.__stderr__
+        sys.stdout = sys.__stdout__
 
-        return func(stdscr, *args, **kwargs)
-    finally:
-        stdscr.keypad(0)
-        curses.echo()
-        curses.nocbreak()
+        # Restore signal handlers
+        if platform.system() != 'Windows':
+            signal.signal(signal.SIGWINCH, self.old_sigwinch_handler)
+            signal.signal(signal.SIGCONT, self.old_sigcont_handler)
+
+    def newwin(self, *args):
+        """Wrapper for curses.newwin to automatically set background colour on any
+        newly created window."""
+        background = app.get_colpair('background')
+        win = curses.newwin(*args)
+        win.bkgd(' ', background)
+        win.scrollok(True)
+        win.keypad(1)
+        # Thanks to Angus Gibson for pointing out this missing line which was causing
+        # problems that needed dirty hackery to fix. :)
+        return win
+
+    @staticmethod
+    def sigwinch(unused_scr):
+        App.DO_RESIZE = True
+
+    @staticmethod
+    def sigcont(unused_scr):
+        App.sigwinch(unused_scr)
+        # Forces the redraw
+        curses.ungetch('\x00')
+
+    @staticmethod
+    def gethw():
+        """I found this code on a usenet post, and snipped out the bit I needed,
+        so thanks to whoever wrote that, sorry I forgot your name, I'm sure you're
+        a great guy.
+
+        It's unfortunately necessary (unless someone has any better ideas) in order
+        to allow curses and readline to work together. I looked at the code for
+        libreadline and noticed this comment:
+
+            /* This is the stuff that is hard for me.  I never seem to write good
+               display routines in C.  Let's see how I do this time. */
+
+        So I'm not going to ask any questions.
+
+        """
+
+        if platform.system() != 'Windows':
+            h, w = struct.unpack(
+                "hhhh",
+                fcntl.ioctl(sys.__stdout__, termios.TIOCGWINSZ, "\000" * 8))[0:2]
+        else:
+            from ctypes import windll, create_string_buffer
+
+            # stdin handle is -10
+            # stdout handle is -11
+            # stderr handle is -12
+
+            h = windll.kernel32.GetStdHandle(-12)
+            csbi = create_string_buffer(22)
+            res = windll.kernel32.GetConsoleScreenBufferInfo(h, csbi)
+
+            if res:
+                (bufx, bufy, curx, cury, wattr,
+                 left, top, right, bottom, maxx, maxy) = struct.unpack("hhhhHhhhhhh", csbi.raw)
+                sizex = right - left + 1
+                sizey = bottom - top + 1
+            else:
+                sizex, sizey = app.scr.getmaxyx()# can't determine actual size - return default values
+
+            h, w = sizey, sizex
+        return h, w
+
+    @staticmethod
+    def idle(caller):
+        """This is called once every iteration through the getkey()
+        loop (currently in the Repl class, see the get_line() method).
+        The statusbar check needs to go here to take care of timed
+        messages and the resize handlers need to be here to make
+        sure it happens conveniently."""
+
+        if importcompletion.find_coroutine() or caller.paste_mode:
+            caller.scr.nodelay(True)
+            key = caller.scr.getch()
+            caller.scr.nodelay(False)
+            if key != -1:
+                curses.ungetch(key)
+            else:
+                curses.ungetch('\x00')
+
+                app.statusbar.check()
+        caller.check()
+
+        if App.DO_RESIZE:
+            App.do_resize(caller)
+
+    @staticmethod
+    def do_resize(caller):
+        """This needs to hack around readline and curses not playing
+        nicely together. See also gethw() above."""
+        h, w = App.gethw()
+        if not h:
+        # Hopefully this shouldn't happen. :)
+            return
+
         curses.endwin()
+        os.environ["LINES"] = str(h)
+        os.environ["COLUMNS"] = str(w)
+        curses.doupdate()
+        App.DO_RESIZE = False
+
+        caller.resize()
+        # The list win resizes itself every time it appears so no need to do it here.
+
+    def init_wins(self):
+        """Initialise the two windows (the main repl interface and the little
+        status bar at the bottom with some stuff in it)"""
+        #TODO: Document better what stuff is on the status bar.
+
+        self.scr.timeout(300)
+
+        h, w = App.gethw()
+
+        main_win = app.newwin(h - 1, w, 0, 0)
+        status_win = app.newwin(1, w, h - 1, 0)
+        return main_win, status_win
+
+    def set_colors(self):
+        try:
+            # curses.start_color()
+            curses.use_default_colors()
+            cols = self._make_colors()
+        except curses.error:
+            cols = FakeDict(-1)
+
+        # FIXME: Gargh, bad design results in using globals without a refactor :(
+        self.colors = cols
+
+    def get_colpair(self, name):
+        color = self.colors[self.config.color_scheme[name].lower()]
+        return curses.color_pair(color + 1)
+
+    def _make_colors(self):
+        """Init all the colours in curses and bang them into a dictionary"""
+
+        # blacK, Red, Green, Yellow, Blue, Magenta, Cyan, White, Default:
+        c = {
+            'k': 0,
+            'r': 1,
+            'g': 2,
+            'y': 3,
+            'b': 4,
+            'm': 5,
+            'c': 6,
+            'w': 7,
+            'd': -1,
+            }
+
+        if platform.system() == 'Windows':
+            c = dict(c.items() +
+                     [
+                         ('K', 8),
+                         ('R', 9),
+                         ('G', 10),
+                         ('Y', 11),
+                         ('B', 12),
+                         ('M', 13),
+                         ('C', 14),
+                         ('W', 15),
+                         ]
+            )
+
+        for i in range(63):
+            if i > 7:
+                j = i // 8
+            else:
+                j = c[self.config.color_scheme['background']]
+            curses.init_pair(i + 1, i % 8, j)
+
+        return c
+
+    def getstdout(self):
+        return self.clirepl.getstdout()
+
+    def refresh(self):
+        self.clirepl.scr.refresh()
+        self.statusbar.refresh()
+
+    def run(self, args, interactive, banner):
+        if args:
+            exit_value = 0
+            try:
+                bpython.config.args.exec_code(self.interpreter, args)
+            except SystemExit, e:
+                # The documentation of code.InteractiveInterpreter.runcode claims
+                # that it reraises SystemExit. However, I can't manage to trigger
+                # that. To be one the safe side let's catch SystemExit here anyway.
+                exit_value = e.args
+            if not interactive:
+                return exit_value
+        else:
+            sys.path.insert(0, '')
+            self.clirepl.startup()
+
+        if banner is not None:
+            self.clirepl.write(banner)
+            self.clirepl.write('\n')
+        exit_value = self.clirepl.run()
+        return exit_value
 
 
 def main_curses(scr, args, config, interactive=True, locals_=None,
@@ -1681,99 +1791,18 @@ def main_curses(scr, args, config, interactive=True, locals_=None,
     Returns a tuple (exit value, output), where exit value is a tuple
     with arguments passed to SystemExit.
     """
-    global stdscr
-    global DO_RESIZE
-    global colors
-    DO_RESIZE = False
-
-    if platform.system() != 'Windows':
-        old_sigwinch_handler = signal.signal(signal.SIGWINCH,
-                                             lambda *_: sigwinch(scr))
-        # redraw window after being suspended
-        old_sigcont_handler = signal.signal(signal.SIGCONT, lambda *_: sigcont(scr))
-
-    stdscr = scr
-    try:
-        curses.start_color()
-        curses.use_default_colors()
-        cols = make_colors(config)
-    except curses.error:
-        cols = FakeDict(-1)
-
-    # FIXME: Gargh, bad design results in using globals without a refactor :(
-    colors = cols
-
-    scr.timeout(300)
-
-    curses.raw(True)
-    main_win, statusbar = init_wins(scr, config)
-
-    if locals_ is None:
-        sys.modules['__main__'] = ModuleType('__main__')
-        locals_ = sys.modules['__main__'].__dict__
-    interpreter = repl.Interpreter(locals_, getpreferredencoding())
-
-    clirepl = CLIRepl(main_win, interpreter, statusbar, config, idle)
-    clirepl._C = cols
-
-    sys.stdin = FakeStdin(clirepl)
-    sys.stdout = FakeStream(clirepl)
-    sys.stderr = FakeStream(clirepl)
-
-    if args:
-        exit_value = 0
-        try:
-            bpython.config.args.exec_code(interpreter, args)
-        except SystemExit, e:
-            # The documentation of code.InteractiveInterpreter.runcode claims
-            # that it reraises SystemExit. However, I can't manage to trigger
-            # that. To be one the safe side let's catch SystemExit here anyway.
-            exit_value = e.args
-        if not interactive:
-            curses.raw(False)
-            return (exit_value, clirepl.getstdout())
-    else:
-        sys.path.insert(0, '')
-        clirepl.startup()
-
-    if banner is not None:
-        clirepl.write(banner)
-        clirepl.write('\n')
-    exit_value = clirepl.repl()
-
-    main_win.erase()
-    main_win.refresh()
-    statusbar.win.clear()
-    statusbar.win.refresh()
-    curses.raw(False)
-
-    # Restore signal handlers
-    if platform.system() != 'Windows':
-        signal.signal(signal.SIGWINCH, old_sigwinch_handler)
-        signal.signal(signal.SIGCONT, old_sigcont_handler)
-
-    return (exit_value, clirepl.getstdout())
+    with App(scr, locals_, config) as app:
+        exit_value = app.run(args, interactive, banner)
+        return (exit_value, app.getstdout())
 
 
 def main(args=None, locals_=None, banner=None):
     translations.init()
-
-
     config, options, exec_args = bpython.config.args.parse_and_load(bpython.config.config, args)
 
-    # Save stdin, stdout and stderr for later restoration
-    orig_stdin = sys.stdin
-    orig_stdout = sys.stdout
-    orig_stderr = sys.stderr
-
-    try:
-        (exit_value, output) = curses_wrapper(
-            main_curses, exec_args, config, options.interactive, locals_,
-            banner=banner)
-    finally:
-        sys.stdin = orig_stdin
-        sys.stderr = orig_stderr
-        sys.stdout = orig_stdout
+    (exit_value, output) = curses.wrapper(
+        main_curses, exec_args, config, options.interactive, locals_,
+        banner=banner)
 
     # Fake stdout data so everything's still visible after exiting
     if config.flush_output and not options.quiet:
@@ -1781,6 +1810,7 @@ def main(args=None, locals_=None, banner=None):
     if hasattr(sys.stdout, 'flush'):
         sys.stdout.flush()
     return repl.extract_exit_value(exit_value)
+
 
 if __name__ == '__main__':
     from bpython.cli import main

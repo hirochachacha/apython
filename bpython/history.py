@@ -96,7 +96,7 @@ class History(object):
             self.index = len(self.entries)
         return self.entries[-self.index]
 
-    def back(self, start=True, search=False):
+    def back(self, start=False, search=False):
         """Move one step back in the history."""
         if not self.is_at_end:
             if search:
@@ -107,7 +107,7 @@ class History(object):
                 self.index += 1
         return self.entries[-self.index] if self.index else self.saved_line
 
-    def forward(self, start=True, search=False):
+    def forward(self, start=False, search=False):
         """Move one step forward in the history."""
         if self.index > 1:
             if search:

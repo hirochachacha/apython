@@ -26,7 +26,8 @@ __version__ = 'mercurial'
 package_dir = os.path.abspath(os.path.dirname(__file__))
 
 
-def embed(locals_=None, args=['-i', '-q'], banner=None):
+def embed(locals_=None, args=None, banner=None):
+    if not args: args = ['-i', '-q']
     from bpython.cli import main
     return main(args, locals_, banner)
 

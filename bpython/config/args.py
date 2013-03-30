@@ -12,7 +12,7 @@ import code
 from optparse import OptionParser, OptionGroup
 
 from bpython import __version__
-from bpython.config.struct import default_config_path, loadini, Struct
+from bpython.config.struct import default_config_path, loadini
 from bpython.translations import _
 
 

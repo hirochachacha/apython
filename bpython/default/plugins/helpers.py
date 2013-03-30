@@ -7,6 +7,8 @@ import re
 import platform
 import subprocess
 import curses
+import sys
+import errno
 from bpython.config import config
 
 
@@ -47,7 +49,7 @@ def invoke_editor(file_name, line_number, reloading):
     if _editor_name:
         if callable(_editor_name):
             argc = len(inspect.getargspec(config.editor).args)
-            args = [file_name, line_number, reloading].take(argc)
+            args = [file_name, line_number, reloading][:argc]
             editor_invocation = _editor_name(*args)
         elif isinstance(_editor_name, str):
             editor_invocation = "%s %s %s" % (
@@ -141,7 +143,7 @@ def invoke_command(command):
     try:
         subprocess.call(command)
     except OSError, e:
-        raise(e)
+        raise e
     finally:
         curses.doupdate()
 

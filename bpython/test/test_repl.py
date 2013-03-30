@@ -26,7 +26,8 @@ class FakeHistory(repl.History):
         pass
 
 class FakeRepl(repl.Repl):
-    def __init__(self, conf={}):
+    def __init__(self, conf=None):
+        if not conf: conf = {}
         repl.Repl.__init__(self, repl.Interpreter(), setup_config(conf))
         self.input_line = ""
         self.current_word = ""

@@ -9,7 +9,7 @@ class TestCLIKeys(unittest.TestCase):
 
     def test_keymap_setitem(self):
         """Verify keys.KeyMap correctly setting items."""
-        keys.cli_key_dispatch['simon'] = 'awesome';
+        keys.cli_key_dispatch['simon'] = 'awesome'
         self.assertEqual(keys.cli_key_dispatch['simon'], 'awesome')
 
     def test_keymap_delitem(self):
@@ -30,7 +30,7 @@ class TestCLIKeys(unittest.TestCase):
         def raiser():
             keys.cli_key_dispatch['C-asdf']
             keys.cli_key_dispatch['C-qwerty']
-        self.assertRaises(KeyError, raiser);
+        self.assertRaises(KeyError, raiser)
 
 class TestUrwidKeys(unittest.TestCase):
     def test_keymap_map(self):
@@ -40,7 +40,7 @@ class TestUrwidKeys(unittest.TestCase):
 
     def test_keymap_setitem(self):
         """Verify keys.KeyMap correctly setting items."""
-        keys.urwid_key_dispatch['simon'] = 'awesome';
+        keys.urwid_key_dispatch['simon'] = 'awesome'
         self.assertEqual(keys.urwid_key_dispatch['simon'], 'awesome')
 
     def test_keymap_delitem(self):
@@ -61,7 +61,7 @@ class TestUrwidKeys(unittest.TestCase):
         def raiser():
             keys.urwid_key_dispatch['C-asdf']
             keys.urwid_key_dispatch['C-qwerty']
-        self.assertRaises(KeyError, raiser);
+        self.assertRaises(KeyError, raiser)
 
 
 if __name__ == '__main__':

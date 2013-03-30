@@ -13,8 +13,10 @@ BLANK = re.compile(r' +')
 
 
 class CannotFindHandler(Exception):
+    def __init__(self, value):
+        self.value = value
     def __str__(self):
-        return "cannot find handler: %s" % repr(self.value)
+        return "cannot find handler: %s" % self.value
 
 
 class DispatchTable(object):
@@ -23,6 +25,8 @@ class DispatchTable(object):
         self._keymap = {}
         self._alias_keymap = {}
         self._dispatch_table = {}
+        self._repl_dispatch_table = {}
+        self._statusbar_dispatch_table = {}
         self._populate()
 
     def set_handler_on(self, ambiguous_keyname, function=None):
@@ -37,14 +41,59 @@ class DispatchTable(object):
                     self._dispatch_table[keyname] = function
             else:
                 raise(Exception("bad argument error"))
-        if function == None:
+        if function is None:
             return inner
         else:
             inner(function)
 
-    def get_handler_on(self, ambiguous_keyname):
+    def set_handler_on_clirepl(self, ambiguous_keyname, function=None):
+        def inner(function):
+            if isinstance(ambiguous_keyname, list):
+                keynames = map(self._get_precise_keyname, filter(bool, ambiguous_keyname))
+                for keyname in keynames:
+                    self._repl_dispatch_table[keyname] = function
+            elif isinstance(ambiguous_keyname, str):
+                keynames = map(self._get_precise_keyname, filter(bool, BLANK.split(ambiguous_keyname)))
+                for keyname in keynames:
+                    self._repl_dispatch_table[keyname] = function
+            else:
+                raise(Exception("bad argument error"))
+        if function is None:
+            return inner
+        else:
+            inner(function)
+
+    def set_handler_on_statusbar(self, ambiguous_keyname, function=None):
+        def inner(function):
+            if isinstance(ambiguous_keyname, list):
+                keynames = map(self._get_precise_keyname, filter(bool, ambiguous_keyname))
+                for keyname in keynames:
+                    self._statusbar_dispatch_table[keyname] = function
+            elif isinstance(ambiguous_keyname, str):
+                keynames = map(self._get_precise_keyname, filter(bool, BLANK.split(ambiguous_keyname)))
+                for keyname in keynames:
+                    self._statusbar_dispatch_table[keyname] = function
+            else:
+                raise(Exception("bad argument error"))
+        if function is None:
+            return inner
+        else:
+            inner(function)
+
+    def get_handler_on_clirepl(self, ambiguous_keyname):
         keyname = self._get_precise_keyname(ambiguous_keyname)
-        if keyname in self._dispatch_table:
+        if keyname in self._repl_dispatch_table:
+            return self._repl_dispatch_table[keyname]
+        elif keyname in self._dispatch_table:
+            return self._dispatch_table[keyname]
+        else:
+            raise(CannotFindHandler(ambiguous_keyname))
+
+    def get_handler_on_statusbar(self, ambiguous_keyname):
+        keyname = self._get_precise_keyname(ambiguous_keyname)
+        if keyname in self._statusbar_dispatch_table:
+            return self._statusbar_dispatch_table[keyname]
+        elif keyname in self._dispatch_table:
             return self._dispatch_table[keyname]
         else:
             raise(CannotFindHandler(ambiguous_keyname))
