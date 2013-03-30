@@ -123,13 +123,17 @@ class DispatchTable(object):
                 long_keyname = curses.keyname(i)
                 self._alias_keymap[long_keyname] = keyname
 
-                if long_keyname.startswith("^"):
+                if long_keyname.startswith("M-"):
+                    self._alias_keymap[long_keyname.replace("M-", "m-", 1)] = keyname
+                    if long_keyname.startswith("M-^"):
+                        self._alias_keymap[long_keyname.replace("M-^", "M-C-", 1)] = keyname
+                        self._alias_keymap[long_keyname.replace("M-^", "m-c-", 1)] = keyname
+                        self._alias_keymap[long_keyname.replace("M-^", "m-c-", 1).lower()] = keyname
+                elif long_keyname.startswith("^"):
                     self._alias_keymap[long_keyname.replace("^", "C-", 1)] = keyname
                     self._alias_keymap[long_keyname.lower().replace("^", "C-", 1)] = keyname
                     self._alias_keymap[long_keyname.replace("^", "c-", 1)] = keyname
                     self._alias_keymap[long_keyname.lower().replace("^", "c-", 1)] = keyname
-                elif long_keyname.startswith("M-"):
-                    self._alias_keymap[long_keyname.replace("M-", "m-", 1)] = keyname
 
             else:
                 keyname = curses.keyname(i)
@@ -154,12 +158,22 @@ class DispatchTable(object):
 
         if platform.system() == 'Windows':
             self._alias_keymap['C_BACK'] = chr(127)
+            self._alias_keymap['M-C_BACK'] = self._alias_keymap['M-%s' % curses.keyname(127)]
+            self._alias_keymap['M-C_BACK'] = self._alias_keymap['m-%s' % curses.keyname(127)]
             self._alias_keymap['BACKSP'] = chr(8)
+            self._alias_keymap['M-BACKSP'] = self._alias_keymap['M-%s' % curses.keyname(8)]
+            self._alias_keymap['M-BACKSP'] = self._alias_keymap['m-%s' % curses.keyname(8)]
         else:
             self._alias_keymap['C_BACK'] = chr(8)
+            self._alias_keymap['M-C_BACK'] = self._alias_keymap['M-%s' % curses.keyname(8)]
+            self._alias_keymap['M-C_BACK'] = self._alias_keymap['m-%s' % curses.keyname(8)]
             self._alias_keymap['BACKSP'] = chr(127)
+            self._alias_keymap['M-BACKSP'] = self._alias_keymap['M-%s' % curses.keyname(127)]
+            self._alias_keymap['M-BACKSP'] = self._alias_keymap['m-%s' % curses.keyname(127)]
 
         self._alias_keymap['ESC'] = chr(27)
+        self._alias_keymap['M-ESC'] = self._alias_keymap['M-%s' % curses.keyname(27)]
+        self._alias_keymap['m-ESC'] = self._alias_keymap['M-%s' % curses.keyname(27)]
 
 
 dispatch_table = DispatchTable()

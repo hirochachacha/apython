@@ -4,7 +4,7 @@
 from bpython.key.dispatch_table import (dispatch_table, CannotFindHandler)
 
 import unicodedata
-import platform
+import curses
 
 
 class Dispatcher(object):
@@ -12,36 +12,43 @@ class Dispatcher(object):
         self.owner = owner
         self.meta = False
         self.raw = False
+        self.yank_index = -2
+        self.previous_key = ''
 
         attr = "get_handler_on_%s" % owner.__class__.__name__.lower()
         self.get_handler = getattr(dispatch_table, attr)
 
     def run(self, key):
         if self.meta:
-            if len(key) == 1 and not unicodedata.category(key) == 'Cc':
+            try:
+                key = "M-%s" % curses.keyname(ord(key))
+            except TypeError:
                 key = "M-%s" % key
             self.meta = False
 
         if self.raw:
             self.raw = False
-            return self.do_normal(key)
+            result = self.do_self_insert(key)
 
         try:
             handler = self.get_handler(key)
-            return handler(self)
+            result = handler(self)
         except CannotFindHandler:
             if len(key) == 1 and not unicodedata.category(key) == 'Cc':
-                return self.do_normal(key)
+                result = self.do_self_insert(key)
             else:
-                return ''
+                result = ''
 
-    def do_normal(self, key):
-        self.owner.addstr(key)
-        self.owner.print_line(self.owner.s)
+        if not self.meta:
+            self.previous_key = key
+        return result
+
+    def do_self_insert(self, key):
+        self.owner.self_insert(key)
         return ''
 
     @dispatch_table.set_handler_on('ESC')
-    def do_escape(self):
+    def do_prefix_meta(self):
         self.meta = True
         return ''
 
@@ -55,55 +62,76 @@ class Dispatcher(object):
         # return ''
 
     @dispatch_table.set_handler_on('KEY_BACKSPACE BACKSP')
-    def do_backspace(self):
-        self.owner.bs()
+    def do_backward_delete_character(self):
+        self.owner.backward_delete_character()
         return ''
 
     @dispatch_table.set_handler_on('KEY_DC C-d')
-    def do_delete(self):
-        self.owner.delete()
-        return ''
-
-    @dispatch_table.set_handler_on('KEY_LEFT C-b')
-    def do_left(self):
-        self.owner.mvc(1)
-        self.owner.print_line(self.owner.s)
+    def do_delete_character(self):
+        self.owner.delete_character()
         return ''
 
     @dispatch_table.set_handler_on('KEY_RIGHT C-f')
-    def do_right(self):
-        self.owner.mvc(-1)
-        self.owner.print_line(self.owner.s)
+    def do_forward_character(self):
+        self.owner.forward_character()
+        return ''
+
+    @dispatch_table.set_handler_on('KEY_LEFT C-b')
+    def do_backward_character(self):
+        self.owner.backward_character()
+        return ''
+
+    @dispatch_table.set_handler_on('M-b')
+    def do_backward_word(self):
+        self.owner.backward_word()
+        return ''
+
+    @dispatch_table.set_handler_on('M-f')
+    def do_forward_word(self):
+        self.owner.forward_word()
         return ''
 
     @dispatch_table.set_handler_on('KEY_HOME C-a')
-    def do_home(self):
-        self.owner.home()
+    def do_beginning_of_line(self):
+        self.owner.beginning_of_line()
         return ''
 
     @dispatch_table.set_handler_on('KEY_END C-e')
-    def do_end(self):
-        self.owner.end()
+    def do_end_of_line(self):
+        self.owner.end_of_line()
         return ''
 
     @dispatch_table.set_handler_on('C-k')
     def do_kill_line(self):
-        self.owner.cut_to_buffer()
+        self.owner.kill_line()
         return ''
 
     @dispatch_table.set_handler_on('C-y')
     def do_yank(self):
-        self.owner.yank_from_buffer()
+        self.owner.yank()
+        self.yank_index = -2
         return ''
 
-    @dispatch_table.set_handler_on('C-w')
-    def do_cut_word(self):
-        self.owner.bs_word()
+    @dispatch_table.set_handler_on('M-y')
+    def do_yank_pop(self):
+        if self.previous_key in ['', 'M-y']:
+            self.owner.yank_pop(self.yank_index)
+            self.yank_index -= 1
+        return ''
+
+    @dispatch_table.set_handler_on('C-w M-BACKSP')
+    def do_backward_kill_word(self):
+        self.owner.backward_kill_word()
+        return ''
+
+    @dispatch_table.set_handler_on('M-d')
+    def do_kill_word(self):
+        self.owner.kill_word()
         return ''
 
     @dispatch_table.set_handler_on('C-u')
-    def do_cut_head(self):
-        self.owner.cut_to_head()
+    def do_backward_kill_line(self):
+        self.owner.backward_kill_line()
         return ''
 
     @dispatch_table.set_handler_on('KEY_BTAB')
@@ -127,8 +155,8 @@ class Dispatcher(object):
         return self.run('*')
 
     @dispatch_table.set_handler_on('\n \r PADENTER')
-    def do_newline(self):
-        self.owner.lf()
+    def do_accept_line(self):
+        self.owner.accept_line()
         return None
 
     @dispatch_table.set_handler_on_clirepl('\t, C-i')
@@ -137,75 +165,76 @@ class Dispatcher(object):
 
     @dispatch_table.set_handler_on_clirepl('C-z')
     def do_suspend(self):
-        if platform.system() != 'Windows':
-            self.owner.suspend()
-            return ''
-        else:
-            self.owner.do_exit = True
-            return None
+        return self.owner.suspend()
 
     @dispatch_table.set_handler_on_clirepl('C-s')
     def do_save(self):
         self.owner.write2file()
         return ''
 
-    @dispatch_table.set_handler_on_clirepl(r'KEY_NPAGE \T')
-    def do_next_page(self):
-        self.owner.hend()
-        self.owner.print_line(self.owner.s)
+    @dispatch_table.set_handler_on_clirepl(r'KEY_PPAGE \S M-<')
+    def do_beginning_of_history(self):
+        self.owner.beginning_of_history()
         return ''
 
-    @dispatch_table.set_handler_on_clirepl(r'KEY_PPAGE \S')
-    def do_previous_page(self):
-        self.owner.hbegin()
-        self.owner.print_line(self.owner.s)
+    @dispatch_table.set_handler_on_clirepl(r'KEY_NPAGE \T M->')
+    def do_end_of_history(self):
+        self.owner.end_of_history()
         return ''
 
     @dispatch_table.set_handler_on_clirepl('C-l')
     def do_clear_screen(self):
-        self.owner.s_hist = [self.owner.s_hist[-1]]
-        self.owner.highlighted_paren = None
-        self.owner.redraw()
+        self.owner.clear_screen()
         return ''
 
-    @dispatch_table.set_handler_on_clirepl('C-r')
+    @dispatch_table.set_handler_on_clirepl('C-_')
     def do_undo(self):
         self.owner.undo()
         return ''
 
-    @dispatch_table.set_handler_on_clirepl('C-o')
-    def do_search(self):
-        self.owner.search()
+#    @dispatch_table.set_handler_on_clirepl('C-s')
+#    def do_search_history(self):
+#        self.owner.search_history()
+#        return ''
+
+    @dispatch_table.set_handler_on_clirepl('C-r')
+    def do_reverse_search_history(self):
+        self.owner.reverse_search_history()
+        return ''
+
+    @dispatch_table.set_handler_on_clirepl('M-. M-_')
+    def do_insert_last_argument(self):
+        self.owner.insert_last_argument()
         return ''
 
     @dispatch_table.set_handler_on_clirepl('KEY_UP C-p')
-    def do_up(self):
-        self.owner.back()
+    def do_previous_history(self):
+        self.owner.previous_history()
         return ''
 
     @dispatch_table.set_handler_on_clirepl('KEY_DOWN C-n')
-    def do_down(self):
-        self.owner.fwd()
+    def do_next_history(self):
+        self.owner.next_history()
         return ''
 
     @dispatch_table.set_handler_on_clirepl('C-d')
-    def do_delete_or_exit(self):
+    def do_delete_character_or_exit(self):
         if not self.owner.s:
             # Delete on empty line exits
             self.owner.do_exit = True
             return None
         else:
-            self.owner.delete()
+            self.owner.delete_character()
             self.owner.complete()
             self.owner.print_line(self.owner.s)
             return ''
 
     @dispatch_table.set_handler_on_clirepl('C_BACK')
     def do_cbackspace(self):
-        self.owner.cut_to_head()
+        self.owner.backward_kill_line()
         return self.run('\n')
 
     @dispatch_table.set_handler_on_statusbar('ESC')
-    def do_cancel_statusbar(self):
-        self.owner.cut_to_head()
+    def do_cancel(self):
+        self.owner.backward_kill_line()
         return self.run('\n')

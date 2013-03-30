@@ -271,13 +271,13 @@ class CLIInteraction(repl.Interaction):
         return self.statusbar.prompt(s)
 
 
-class EditableMixin(object):
+class Editable(object):
     def __init__(self, scr, config):
         from bpython.key.dispatcher import Dispatcher
         self.scr = scr
         self.config = config
         self.s = ''
-        self.cut_buffer = ""
+        self.cut_buffer = []
         self.cpos = 0
         self.do_exit = False
         self.last_key_press = time.time()
@@ -367,7 +367,7 @@ class EditableMixin(object):
         if x == self.ix and y == self.iy and i >= 1:
             return False
 
-        h, w = gethw()
+        h, w = App.gethw()
         if x - i < 0:
             y -= 1
             x = w
@@ -523,7 +523,46 @@ class EditableMixin(object):
         self.print_line(self.s)
         app.refresh()
 
-    def bs(self, delete_tabs=True):
+    def self_insert(self, key):
+        self.addstr(key)
+        self.print_line(self.s)
+
+    def backward_character(self):
+        self.mvc(1)
+        self.print_line(self.s)
+
+    def forward_character(self):
+        self.mvc(-1)
+        self.print_line(self.s)
+
+    def backward_word(self):
+        if self.cpos == 0 and not self.s:
+            pass
+        else:
+            pos = len(self.s) - self.cpos - 1
+            while pos >= 0 and self.s[pos] == ' ':
+                pos -= 1
+                self.backward_character()
+                # Then we delete a full word.
+            while pos >= 0 and self.s[pos] != ' ':
+                pos -= 1
+                self.backward_character()
+
+    def forward_word(self):
+        if self.cpos == 0 and not self.s:
+            pass
+        else:
+            len_s = len(self.s)
+            pos = len_s - self.cpos - 1
+            while len_s > pos and self.s[pos] == ' ':
+                pos += 1
+                self.forward_character()
+                # Then we delete a full word.
+            while len_s > pos and self.s[pos] != ' ':
+                pos += 1
+                self.forward_character()
+
+    def backward_delete_character(self, delete_tabs=True):
         """Process a backspace"""
         y, x = self.scr.getyx()
         if not self.s:
@@ -544,7 +583,31 @@ class EditableMixin(object):
         self.print_line(self.s, clr=True)
         return n
 
-    def bs_word(self):
+    def delete_character(self):
+        """Process a del"""
+        if not self.s:
+            return
+
+        if self.mvc(-1):
+            self.backward_delete_character(False)
+
+    def kill_word(self):
+        if self.cpos == 0 and not self.s:
+            pass
+        else:
+            deleted = []
+            len_s = len(self.s)
+            pos = len_s - self.cpos
+            while self.cpos > 0 and self.s[pos] == ' ':
+                deleted.append(self.s[pos])
+                self.delete_character()
+                # Then we delete a full word.
+            while self.cpos > 0 and self.s[pos] != ' ':
+                deleted.append(self.s[pos])
+                self.delete_character()
+            self.cut_buffer.append(''.join(deleted))
+
+    def backward_kill_word(self):
         if self.cpos == 0 and not self.s:
             pass
         else:
@@ -553,34 +616,34 @@ class EditableMixin(object):
             # First we delete any space to the left of the cursor.
             while pos >= 0 and self.s[pos] == ' ':
                 deleted.append(self.s[pos])
-                pos -= self.bs()
+                pos -= self.backward_delete_character()
                 # Then we delete a full word.
             while pos >= 0 and self.s[pos] != ' ':
                 deleted.append(self.s[pos])
-                pos -= self.bs()
-            self.cut_buffer = ''.join(reversed(deleted))
+                pos -= self.backward_delete_character()
+            self.cut_buffer.append(''.join(reversed(deleted)))
 
-    def cut_to_buffer(self):
+    def kill_line(self):
         """Clear from cursor to end of line, placing into cut buffer"""
         if self.cpos == 0:
             pass
         else:
-            self.cut_buffer = self.s[-self.cpos:]
+            self.cut_buffer.append(self.s[-self.cpos:])
             self.s = self.s[:-self.cpos]
             self.cpos = 0
             self.print_line(self.s, clr=True)
             self.scr.redrawwin()
             self.scr.refresh()
 
-    def cut_to_head(self):
+    def backward_kill_line(self):
         """Clear from cursor to beginning of line, placing into cut buffer"""
         if self.cpos == 0:
             if self.s:
-                self.cut_buffer = self.s
+                self.cut_buffer.append(self.s)
             else:
                 pass
         else:
-            self.cut_buffer = self.s[:-self.cpos]
+            self.cut_buffer.append(self.s[:-self.cpos])
         self.clear_wrapped_lines()
         if not self.cpos:
             self.s = ''
@@ -588,24 +651,16 @@ class EditableMixin(object):
             self.s = self.s[-self.cpos:]
         self.print_line(self.s, clr=True)
 
-    def delete(self):
-        """Process a del"""
-        if not self.s:
-            return
-
-        if self.mvc(-1):
-            self.bs(False)
-
-    def home(self, refresh=True):
+    def beginning_of_line(self, refresh=True):
         self.scr.move(self.iy, self.ix)
         self.cpos = len(self.s)
         if refresh:
             self.scr.refresh()
         self.print_line(self.s)
 
-    def end(self, refresh=True):
+    def end_of_line(self, refresh=True):
         self.cpos = 0
-        h, w = gethw()
+        h, w = App.gethw()
         y, x = divmod(len(self.s) + self.ix, w)
         y += self.iy
         self.scr.move(y, x)
@@ -613,12 +668,19 @@ class EditableMixin(object):
             self.scr.refresh()
         self.print_line(self.s)
 
-    def yank_from_buffer(self):
+    def yank(self):
         """Paste the text from the cut buffer at the current cursor location"""
-        self.addstr(self.cut_buffer)
+        self.addstr(self.cut_buffer[-1])
         self.print_line(self.s, clr=True)
 
-    def lf(self):
+    def yank_pop(self, yank_index):
+        """Paste the text from the cut buffer at the current cursor location"""
+        for _ in range(len(self.cut_buffer[(yank_index + 1) % len(self.cut_buffer)])):
+            self.backward_delete_character()
+        self.addstr(self.cut_buffer[yank_index % len(self.cut_buffer)])
+        self.print_line(self.s, clr=True)
+
+    def accept_line(self):
         """Process a linefeed character; it only needs to check the
         cursor position and move appropriately so it doesn't clear
         the current line after the cursor."""
@@ -631,10 +693,10 @@ class EditableMixin(object):
         self.echo("\n")
 
 
-class CLIRepl(repl.Repl, EditableMixin):
+class CLIRepl(repl.Repl, Editable):
     def __init__(self, scr, interp, config):
         repl.Repl.__init__(self, interp, config)
-        EditableMixin.__init__(self, scr, config)
+        Editable.__init__(self, scr, config)
         self.interp.writetb = self.writetb
         self.list_win = app.newwin(1, 1, 1, 1)
         self.exit_value = ()
@@ -682,24 +744,24 @@ class CLIRepl(repl.Repl, EditableMixin):
         """Add a string to the current input line and figure out
         where it should go, depending on the cursor position."""
         self.rl_history.reset()
-        EditableMixin.addstr(self, s)
+        Editable.addstr(self, s)
         self.complete()
 
-    def bs(self, delete_tabs=True):
+    def backward_delete_character(self, delete_tabs=True):
         """Process a backspace"""
         self.rl_history.reset()
-        result = EditableMixin.bs(self, delete_tabs=delete_tabs)
+        result = Editable.backward_delete_character(self, delete_tabs=delete_tabs)
         self.complete()
         return result
 
-    def bs_word(self):
+    def backward_kill_word(self):
         self.rl_history.reset()
-        result = EditableMixin.bs_word(self)
+        result = Editable.backward_kill_word(self)
         self.complete()
         return result
 
-    def cut_to_head(self):
-        EditableMixin.cut_to_head(self)
+    def backward_kill_line(self):
+        Editable.backward_kill_line(self)
         self.scr.redrawwin()
         self.scr.refresh()
 
@@ -718,7 +780,7 @@ class CLIRepl(repl.Repl, EditableMixin):
             for _ in xrange(self.next_indentation()):
                 self.p_key('\t')
         self.cpos = 0
-        return EditableMixin.get_line(self)
+        return Editable.get_line(self)
 
     def complete(self, tab=False):
         """Get Autcomplete list and window."""
@@ -750,7 +812,7 @@ class CLIRepl(repl.Repl, EditableMixin):
                 self.scr.redrawwin()
                 self.scr.refresh()
 
-    def hbegin(self):
+    def beginning_of_history(self):
         """Replace the active line with first line in history and
         increment the index to keep track"""
         self.cpos = 0
@@ -759,7 +821,7 @@ class CLIRepl(repl.Repl, EditableMixin):
         self.s = self.rl_history.first()
         self.print_line(self.s, clr=True)
 
-    def hend(self):
+    def end_of_history(self):
         """Same as hbegin() but, well, forward"""
         self.cpos = 0
         self.clear_wrapped_lines()
@@ -767,7 +829,14 @@ class CLIRepl(repl.Repl, EditableMixin):
         self.s = self.rl_history.last()
         self.print_line(self.s, clr=True)
 
-    def back(self):
+    def insert_last_argument(self):
+        self.cpos = 0
+        self.clear_wrapped_lines()
+        self.rl_history.enter(self.s)
+        self.s = self.rl_history.back().rstrip().split()[-1]
+        self.print_line(self.s, clr=True)
+
+    def previous_history(self):
         """Replace the active line with previous line in history and
         increment the index to keep track"""
 
@@ -777,7 +846,7 @@ class CLIRepl(repl.Repl, EditableMixin):
         self.s = self.rl_history.back()
         self.print_line(self.s, clr=True)
 
-    def fwd(self):
+    def next_history(self):
         """Same as back() but, well, forward"""
 
         self.cpos = 0
@@ -786,12 +855,20 @@ class CLIRepl(repl.Repl, EditableMixin):
         self.s = self.rl_history.forward()
         self.print_line(self.s, clr=True)
 
-    def search(self):
+    def reverse_search_history(self):
         """Search with the partial matches from the history object."""
         self.cpo = 0
         self.clear_wrapped_lines()
         self.rl_history.enter(self.s)
         self.s = self.rl_history.back(start=False, search=True)
+        self.print_line(self.s, clr=True)
+
+    def search_history(self):
+        """Search with the partial matches from the history object."""
+        self.cpo = 0
+        self.clear_wrapped_lines()
+        self.rl_history.enter(self.s)
+        self.s = self.rl_history.fwd(start=False, search=True)
         self.print_line(self.s, clr=True)
 
     def mkargspec(self, topline, down):
@@ -1193,11 +1270,20 @@ class CLIRepl(repl.Repl, EditableMixin):
         self.w = w
         self.h = h - 1
 
+    def clear_screen(self):
+        self.s_hist = [self.s_hist[-1]]
+        self.highlighted_paren = None
+        self.redraw()
+
     def suspend(self):
         """Suspend the current process for shell job control."""
         if platform.system() != 'Windows':
             curses.endwin()
             os.kill(os.getpid(), signal.SIGSTOP)
+            return ''
+        else:
+            self.do_exit = True
+            return None
 
     def tab(self, back=False):
         """Process the tab key being hit.
@@ -1394,7 +1480,7 @@ class CLIRepl(repl.Repl, EditableMixin):
                     yield (Token.Text, newline)
 
 
-class Statusbar(EditableMixin):
+class Statusbar(Editable):
     """This class provides the status bar at the bottom of the screen.
     It has message() and prompt() methods for user interactivity, as
     well as settext() and clear() methods for changing its appearance.
@@ -1420,7 +1506,7 @@ class Statusbar(EditableMixin):
 
     def __init__(self, scr, config, color=None):
         """Initialise the statusbar and display the initial text (if any)"""
-        EditableMixin.__init__(self, scr, config)
+        Editable.__init__(self, scr, config)
         self.size()
 
         self.s = ''
