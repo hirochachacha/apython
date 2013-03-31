@@ -287,6 +287,12 @@ class Editable(object):
         self.key_dispatcher = Dispatcher(self)
         self.iy, self.ix = self.scr.getyx()
 
+    def _get_width(self,  c):
+        if unicodedata.east_asian_width(c) in 'WFA':
+            return 2
+        else:
+            return 1
+
     def p_key(self, key):
         return self.key_dispatcher.run(key)
 
@@ -359,6 +365,9 @@ class Editable(object):
             current cursor position + i
             for positive values of i the cursor will move towards the beginning
             of the line, negative values the opposite."""
+        if i == 0:
+            return False
+
         y, x = self.scr.getyx()
 
         if self.cpos == 0 and i < 0:
@@ -367,17 +376,43 @@ class Editable(object):
         if x == self.ix and y == self.iy and i >= 1:
             return False
 
+        s_width = list(map(self._get_width, self.s))
+        width = 0
+        if i > 0:
+            if i == 1:
+                width = s_width[- self.cpos - 1]
+            else:
+                for _ in range(i):
+                    self.mvc(1)
+        elif i == 0:
+            return False
+        else:
+            if i == -1:
+                width = - s_width[- self.cpos]
+            else:
+                for _ in range(-i):
+                    self.mvc(-1)
+
         h, w = App.gethw()
-        if x - i < 0:
+
+        if x - width < 0:
             y -= 1
             x = w
 
-        if x - i >= w:
+        if x - width >= w:
             y += 1
             x = 0 + i
 
         self.cpos += i
-        self.scr.move(y, x - i)
+        self.scr.move(y, x - width)
+#        if self.cpos == 0:
+#            self.interact.notify(u"width: %s cpos: %s current_w: %d i: %d" % ( unicode(s_width), unicode(self.cpos), 0, i) )
+#        else:
+#            try:
+#                self.interact.notify(u"width: %s cpos: %s current_w: %d i: %d" % ( unicode(s_width), unicode(self.cpos), s_width[- self.cpos], i) )
+#            except:
+#                self.interact.notify(u"width: %s cpos: %s current_w: %d i: %d" % ( unicode(s_width), unicode(self.cpos), 0, i) )
+
         if refresh:
             self.scr.refresh()
         return True
@@ -482,9 +517,9 @@ class Editable(object):
 
         if self.cpos:
             t = self.cpos
-            for _ in range(self.cpos):
+            self.cpos = 0
+            for _ in range(t):
                 self.mvc(1)
-            self.cpos = t
 
     def reprint_line(self, lineno, tokens):
         """Helper function for paren highlighting: Reprint line at offset
@@ -508,32 +543,15 @@ class Editable(object):
         for string in line.split('\x04'):
             self.echo(string)
 
-    def redraw(self):
-        """Redraw the screen."""
-        self.scr.erase()
-        for k, s in enumerate(self.s_hist):
-            if not s:
-                continue
-            self.iy, self.ix = self.scr.getyx()
-            for i in s.split('\x04'):
-                self.echo(i, redraw=False)
-            if k < len(self.s_hist) -1:
-                self.scr.addstr('\n')
-        self.iy, self.ix = self.scr.getyx()
-        self.print_line(self.s)
-        app.refresh()
-
     def self_insert(self, key):
         self.addstr(key)
         self.print_line(self.s)
 
     def backward_character(self):
         self.mvc(1)
-        self.print_line(self.s)
 
     def forward_character(self):
         self.mvc(-1)
-        self.print_line(self.s)
 
     def backward_word(self):
         if self.cpos == 0 and not self.s:
@@ -632,8 +650,6 @@ class Editable(object):
             self.s = self.s[:-self.cpos]
             self.cpos = 0
             self.print_line(self.s, clr=True)
-            self.scr.redrawwin()
-            self.scr.refresh()
 
     def backward_kill_line(self):
         """Clear from cursor to beginning of line, placing into cut buffer"""
@@ -649,6 +665,7 @@ class Editable(object):
             self.s = ''
         else:
             self.s = self.s[-self.cpos:]
+        self.cpos = len(self.s)
         self.print_line(self.s, clr=True)
 
     def beginning_of_line(self, refresh=True):
@@ -656,17 +673,16 @@ class Editable(object):
         self.cpos = len(self.s)
         if refresh:
             self.scr.refresh()
-        self.print_line(self.s)
 
     def end_of_line(self, refresh=True):
         self.cpos = 0
+        s_width = list(map(self._get_width, self.s))
         h, w = App.gethw()
-        y, x = divmod(len(self.s) + self.ix, w)
+        y, x = divmod(sum(s_width) + self.ix, w)
         y += self.iy
         self.scr.move(y, x)
         if refresh:
             self.scr.refresh()
-        self.print_line(self.s)
 
     def yank(self):
         """Paste the text from the cut buffer at the current cursor location"""
@@ -1047,6 +1063,21 @@ class CLIRepl(repl.Repl, Editable):
             if not more:
                 self.s = ''
         return self.exit_value
+
+    def redraw(self):
+        """Redraw the screen."""
+        self.scr.erase()
+        for k, s in enumerate(self.s_hist):
+            if not s:
+                continue
+            self.iy, self.ix = self.scr.getyx()
+            for i in s.split('\x04'):
+                self.echo(i, redraw=False)
+            if k < len(self.s_hist) -1:
+                self.scr.addstr('\n')
+        self.iy, self.ix = self.scr.getyx()
+        self.print_line(self.s)
+        app.refresh()
 
     def resize(self):
         """This method exists simply to keep it straight forward when
