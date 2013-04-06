@@ -26,6 +26,7 @@
 
 from __future__ import with_statement
 import codecs
+import itertools
 
 
 class History(object):
@@ -90,6 +91,15 @@ class History(object):
                     pass
             self.entries.append(line)
 
+    def enter(self, line):
+        self.saved_line = line
+
+    def last(self):
+        """Move forward to the end of the history."""
+        if not self.is_at_start:
+            self.index = 0
+        return self.entries[0]
+
     def first(self):
         """Move back to the beginning of the history."""
         if not self.is_at_end:
@@ -98,38 +108,50 @@ class History(object):
 
     def back(self, start=False, search=False):
         """Move one step back in the history."""
-        if not self.is_at_end:
-            if search:
-                self.index += self._find_partial_match_backward(self.saved_line)
-            elif start:
-                self.index += self._find_match_backward(self.saved_line)
-            else:
-                self.index += 1
-        return self.entries[-self.index] if self.index else self.saved_line
+        return self.back_iter(start, search).next()[0]
 
     def forward(self, start=False, search=False):
         """Move one step forward in the history."""
-        if self.index > 1:
-            if search:
-                self.index -= self._find_partial_match_forward(self.saved_line)
-            elif start:
-                self.index -= self._find_match_forward(self.saved_line)
-            else:
-                self.index -= 1
-            return self.entries[-self.index] if self.index else self.saved_line
+        try:
+            return self.forward_iter(start, search).next()[0]
+        except StopIteration:
+            return ""
+
+    def back_iter(self, start=False, search=False):
+        if search:
+            iterable = self._find_partial_match_backward_iter(self.saved_line)
+        elif start:
+            iterable = self._find_match_backward_iter(self.saved_line)
         else:
-            self.index = 0
-            return self.saved_line
+            iterable = itertools.count(1)
+        original = self.index
+        for i in iterable:
+            try:
+                self.index = i + original
+                yield (self.entries[-self.index], self.index)
+            except IndexError:
+                break
+        if len(self.entries) > 0:
+            if not start and not search:
+                yield (self.entries[-self.index], self.index)
+        else:
+            yield (self.saved_line, self.index)
 
-    def last(self):
-        """Move forward to the end of the history."""
-        if not self.is_at_start:
-            self.index = 0
-        return self.entries[0]
-
-    def enter(self, line):
-        if self.index == 0:
-            self.saved_line = line
+    def forward_iter(self, start=False, search=False):
+        if search:
+            iterable = self._find_partial_match_forward_iter(self.saved_line)
+        elif start:
+            iterable = self._find_match_forward_iter(self.saved_line)
+        else:
+            iterable = itertools.count(1)
+        original = self.index
+        if original > 0:
+            for i in iterable:
+                self.index = original - i
+                if self.index > 0:
+                    yield (self.entries[-self.index], self.index)
+                else:
+                    break
 
     def load(self, filename, encoding):
         with codecs.open(filename, 'r', encoding, 'ignore') as hfile:
@@ -160,6 +182,22 @@ class History(object):
                 return idx + 1
         return 0
 
+    def _find_match_backward_iter(self, search_term):
+        filtered_list_len = len(self.entries) - self.index
+        val_set = set()
+        for idx, val in enumerate(reversed(self.entries[:filtered_list_len])):
+            if val.startswith(search_term) and val not in val_set:
+                val_set.add(val)
+                yield idx + 1
+
+    def _find_partial_match_backward_iter(self, search_term):
+        filtered_list_len = len(self.entries) - self.index
+        val_set = set()
+        for idx, val in enumerate(reversed(self.entries[:filtered_list_len])):
+            if search_term in val and val not in val_set:
+                val_set.add(val)
+                yield idx + 1
+
     def _find_match_forward(self, search_term):
         filtered_list_len = len(self.entries) - self.index + 1
         for idx, val in enumerate(self.entries[filtered_list_len:]):
@@ -173,3 +211,19 @@ class History(object):
             if search_term in val:
                 return idx + 1
         return self.index
+
+    def _find_match_forward_iter(self, search_term):
+        filtered_list_len = len(self.entries) - self.index + 1
+        val_set = set()
+        for idx, val in enumerate(self.entries[filtered_list_len:]):
+            if val.startswith(search_term) and val not in val_set:
+                val_set.add(val)
+                yield idx + 1
+
+    def _find_partial_match_forward_iter(self, search_term):
+        filtered_list_len = len(self.entries) - self.index + 1
+        val_set = set()
+        for idx, val in enumerate(self.entries[filtered_list_len:]):
+            if search_term in val and val not in val_set:
+                val_set.add(val)
+                yield idx + 1

@@ -27,17 +27,17 @@ class Dispatcher(object):
             self.meta = False
 
         if self.raw:
-            self.raw = False
             result = self.do_self_insert(key)
-
-        try:
-            handler = self.get_handler(key)
-            result = handler(self)
-        except CannotFindHandler:
-            if len(key) == 1 and not unicodedata.category(key) == 'Cc':
-                result = self.do_self_insert(key)
-            else:
-                result = ''
+            self.raw = False
+        else:
+            try:
+                handler = self.get_handler(key)
+                result = handler(self)
+            except CannotFindHandler:
+                if len(key) == 1 and not unicodedata.category(key) == 'Cc':
+                    result = self.do_self_insert(key)
+                else:
+                    result = ''
 
         if not self.meta:
             self.previous_key = key
@@ -47,19 +47,11 @@ class Dispatcher(object):
         self.owner.self_insert(key)
         return ''
 
-    @dispatch_table.set_handler_on('ESC')
-    def do_prefix_meta(self):
-        self.meta = True
+    # issue C-m C-a C-m C-i
+    @dispatch_table.set_handler_on('C-v')
+    def do_raw(self):
+        self.raw = True
         return ''
-
-    # C-aとC-mで文字が表示されない
-    # do_left, do_rightの際に2文字分移動する必要が有る
-    # do_deleteの際に2文字分移動する必要が有る
-    # (1..31)までのascii
-    # @dispatch_table.set_handler_on('C-v')
-    # def do_raw(self):
-        # self.raw = True
-        # return ''
 
     @dispatch_table.set_handler_on('KEY_BACKSPACE BACKSP')
     def do_backward_delete_character(self):
@@ -167,10 +159,10 @@ class Dispatcher(object):
     def do_suspend(self):
         return self.owner.suspend()
 
-    @dispatch_table.set_handler_on_clirepl('C-s')
-    def do_save(self):
-        self.owner.write2file()
-        return ''
+    # @dispatch_table.set_handler_on_clirepl('C-s')
+    # def do_save(self):
+        # self.owner.write2file()
+        # return ''
 
     @dispatch_table.set_handler_on_clirepl(r'KEY_PPAGE \S M-<')
     def do_beginning_of_history(self):
@@ -192,10 +184,10 @@ class Dispatcher(object):
         self.owner.undo()
         return ''
 
-#    @dispatch_table.set_handler_on_clirepl('C-s')
-#    def do_search_history(self):
-#        self.owner.search_history()
-#        return ''
+    @dispatch_table.set_handler_on_clirepl('C-s')
+    def do_search_history(self):
+        self.owner.search_history()
+        return ''
 
     @dispatch_table.set_handler_on_clirepl('C-r')
     def do_reverse_search_history(self):
@@ -220,19 +212,24 @@ class Dispatcher(object):
     @dispatch_table.set_handler_on_clirepl('C-d')
     def do_delete_character_or_exit(self):
         if not self.owner.s:
-            # Delete on empty line exits
             self.owner.do_exit = True
             return None
         else:
             self.owner.delete_character()
-            self.owner.complete()
-            self.owner.print_line(self.owner.s)
             return ''
 
     @dispatch_table.set_handler_on_clirepl('C_BACK')
     def do_cbackspace(self):
         self.owner.backward_kill_line()
         return self.run('\n')
+
+    @dispatch_table.set_handler_on_clirepl('ESC')
+    def do_prefix_meta(self):
+        if self.owner.in_search_mode:
+            self.owner.exit_search_mode()
+        else:
+            self.meta = True
+        return ''
 
     @dispatch_table.set_handler_on_statusbar('ESC')
     def do_cancel(self):

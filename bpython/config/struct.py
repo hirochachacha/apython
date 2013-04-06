@@ -80,8 +80,10 @@ def _loadini(struct, configfile):
     struct.hist_duplicates = config.getboolean('general', 'hist_duplicates')
     struct.flush_output = config.getboolean('general', 'flush_output')
 
-    struct.cli_suggestion_width = config.getfloat('cli',
-                                                  'suggestion_width')
+    struct.cli_suggestion_width = config.getfloat('cli', 'suggestion_width')
+    if struct.cli_suggestion_width <= 0 or struct.cli_suggestion_width > 1:
+        struct.cli_suggestion_width = 0.8
+
     struct.cli_trim_prompts = config.getboolean('cli',
                                                   'trim_prompts')
     struct.complete_magic_methods = config.getboolean('general',

@@ -50,7 +50,6 @@ if py3:
 
 
 class Interpreter(code.InteractiveInterpreter):
-
     def __init__(self, locals=None, encoding=None):
         """The syntaxerror callback can be set at any time and will be called
         on a caught syntax error. The purpose for this in bpython is so that
@@ -175,6 +174,11 @@ class MatchesIterator(object):
             self.matches = list(matches)
             self.index = -1
 
+    def force_update(self, matches):
+        self.matches = list(matches)
+        self.current_word = ''
+        self.index = -1
+
 
 class Interaction(object):
     def __init__(self, config, statusbar=None):
@@ -262,7 +266,7 @@ class Repl(object):
         pythonhist = os.path.expanduser(self.config.hist_file)
         if os.path.exists(pythonhist):
             self.rl_history.load(pythonhist,
-                    getpreferredencoding() or "ascii")
+                                 getpreferredencoding() or "ascii")
 
 
     #alias
@@ -271,24 +275,24 @@ class Repl(object):
         return self.stdin_history
 
     def current_line(self):
-        raise(NotImplementedError("current_line should be implemented in subclass"))
+        raise (NotImplementedError("current_line should be implemented in subclass"))
 
     def clear_current_line(self):
         """This is used as the exception callback for the Interpreter instance.
         It prevents autoindentation from occuring after a traceback."""
-        raise(NotImplementedError("clear_current_line should be implemented in subclass"))
+        raise (NotImplementedError("clear_current_line should be implemented in subclass"))
 
     def current_word(self):
-        raise(NotImplementedError("current_word should be implemented in subclass"))
+        raise (NotImplementedError("current_word should be implemented in subclass"))
 
     def reevaluate(self):
-        raise(NotImplementedError("reevaluate should be implemented in subclass"))
+        raise (NotImplementedError("reevaluate should be implemented in subclass"))
 
     def tab(self):
-        raise(NotImplementedError("tab should be implemented in subclass"))
+        raise (NotImplementedError("tab should be implemented in subclass"))
 
     def tokenize(self, s, newline=False):
-        raise(NotImplementedError("tokenize should be implemented in subclass"))
+        raise (NotImplementedError("tokenize should be implemented in subclass"))
 
     def startup(self):
         """
@@ -371,7 +375,7 @@ class Repl(object):
         stack = [['', 0, '']]
         try:
             for (token, value) in PythonLexer().get_tokens(
-                self.current_line()):
+                    self.current_line()):
                 if token is Token.Punctuation:
                     if value in '([{':
                         stack.append(['', 0, value])
@@ -388,7 +392,7 @@ class Repl(object):
                     else:
                         stack[-1][0] = ''
                 elif (token is Token.Name or token in Token.Name.subtypes or
-                      token is Token.Operator and value == '.'):
+                                  token is Token.Operator and value == '.'):
                     stack[-1][0] += value
                 elif token is Token.Operator and value == '=':
                     stack[-1][1] = stack[-1][0]
@@ -507,8 +511,8 @@ class Repl(object):
             else:
                 matches = self.completer.matches
                 if (self.config.complete_magic_methods and self.buffer and
-                    self.buffer[0].startswith("class ") and
-                    self.current_line().lstrip().startswith("def ")):
+                        self.buffer[0].startswith("class ") and
+                        self.current_line().lstrip().startswith("def ")):
                     matches.extend(name for name in self.config.magic_methods
                                    if name.startswith(current_word))
 
@@ -556,7 +560,7 @@ class Repl(object):
                 if i >= height:
                     return out
                 i += 1
-        # Drop the last newline
+            # Drop the last newline
         out[-1] = out[-1].rstrip()
         return out
 
@@ -588,6 +592,7 @@ class Repl(object):
                     yield line[len(self.ps2):]
                 elif line.rstrip():
                     yield "# OUT: %s" % (line,)
+
         return "\n".join(process())
 
     def write2file(self):
@@ -698,6 +703,7 @@ class Repl(object):
     def close(self):
         """See the flush() method docstring."""
 
+
 def next_indentation(line, tab_length):
     """Given a code line, return the indentation of the next line."""
     line = line.expandtabs(tab_length)
@@ -747,6 +753,7 @@ def token_is_any_of(token_types):
         return any(check(token) for check in is_token_types)
 
     return token_is_any_of
+
 
 def extract_exit_value(args):
     """Given the arguments passed to `SystemExit`, return the value that
