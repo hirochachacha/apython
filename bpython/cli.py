@@ -52,6 +52,8 @@ import math
 import re
 import time
 
+import keyword
+
 import struct
 
 if platform.system() != 'Windows':
@@ -72,6 +74,7 @@ from bpython.formatter import BPythonFormatter
 # This for completion
 from bpython.completion import importcompletion
 from bpython.completion import autocomplete
+from bpython.completion import inspection
 
 # This for config
 from bpython.config.struct import Struct
@@ -85,34 +88,21 @@ from bpython._py3compat import PythonLexer, py3
 from bpython.formatter import Parenthesis
 import bpython.config.args
 
+
 if not py3:
     import inspect
 
 
 # --- module globals ---
 app = None
-
+clipboard = []
 # ---
 
+def debug(s):
+    app.clirepl.interact.notify(s)
 
 def getpreferredencoding():
     return locale.getpreferredencoding() or sys.getdefaultencoding()
-
-
-def calculate_screen_lines(tokens, width, cursor=0):
-    """Given a stream of tokens and a screen width plus an optional
-    initial cursor position, return the amount of needed lines on the
-    screen."""
-    lines = 1
-    pos = cursor
-    for (token, value) in tokens:
-        if token is Token.Text and value == '\n':
-            lines += 1
-        else:
-            pos += len(value)
-            lines += pos // width
-            pos %= width
-    return lines
 
 
 class FakeStream(object):
@@ -266,7 +256,6 @@ class CLIInteraction(repl.Interaction):
 
         return reply.lower() in (_('y'), _('yes'))
 
-
     def notify(self, s, n=10):
         return self.statusbar.message(s, n)
 
@@ -281,7 +270,6 @@ class ListBox(object):
         self.format_docstring = format_docstring
 
         self.topline = None
-        # self.current_item = None
         self.nosep = False
 
         self.rows = 0
@@ -296,57 +284,32 @@ class ListBox(object):
         self.y = 0
 
         self.items = []
-        self.v_items = []
         self.index = -1
+        self.v_items = []
         self.v_index = -1
         self.down = 0
         self.height_offset = 0
 
     def show(self):
-        self._prepare()
+        if self.items:
+            self._prepare_v_items()
+            self._show_v_items()
+        elif self.docstring is not None:
+            self._prepare_doc()
+            self._show_doc()
 
-        if self.docstring is None:
-            self.scr.resize(self.rows + 2, self.w)
-        else:
-            docstrings = self.format_docstring(self.docstring, self.max_w - 2,
-                                               self.max_h - self.height_offset)
-            self.docstring = ''.join(docstrings)
-            self.rows += len(docstrings)
-            self.scr.resize(self.rows, self.max_w)
+    def sync(self, matches_iter):
+        self.index = matches_iter.index
 
-        if self.down:
-            self.scr.mvwin(self.y + 1, 0)
-        else:
-            self.scr.mvwin(self.y - self.rows - 2, 0)
-
-        if self.v_items:
-            self.scr.addstr('\n ')
-
-        if not py3:
-            encoding = getpreferredencoding()
-        for ix, i in enumerate(self.v_items):
-            padding = (self.wl - len(i)) * ' '
-            if ix == self.v_index:
-                color = app.get_colpair('operator')
-            else:
-                color = app.get_colpair('main')
-            if not py3:
-                i = i.encode(encoding)
-            self.scr.addstr(i + padding, color)
-            if ((self.cols == 1 or (ix and not (ix + 1) % self.cols))
-                and ix + 1 < len(self.v_items)):
-                self.scr.addstr('\n ')
-
-        if self.docstring is not None:
-            if not py3 and isinstance(self.docstring, unicode):
-                self.docstring = self.docstring.encode(encoding, 'ignore')
-            self.scr.addstr('\n' + self.docstring, app.get_colpair('comment'))
-            # XXX: After all the trouble I had with sizing the list box (I'm not very good
-            # at that type of thing) I decided to do this bit of tidying up here just to
-            # make sure there's no unnececessary blank lines, it makes things look nicer.
-
-        h = self.scr.getyx()[0] + 2
-        self.scr.resize(h, self.w)
+    # def next_page(self, matches_iter):
+    #     matches_iter.index += (len(self.v_items) - self.v_index -1)
+    #     self.sync(matches_iter)
+    #     self._prepare_v_items()
+    #     self.v_index -= 1
+    #     self._show_v_items()
+    #     matches_iter.index -= 1
+    #     self.v_index += 1
+    #     self.sync(matches_iter)
 
     def refresh(self):
         self.scr.attron(app.get_colpair('main'))
@@ -371,54 +334,127 @@ class ListBox(object):
         self.max_w = max_w
         self.y = y
         self.index = -1
-        self.v_index = -1
-        self.docstring = parent.docstring
-
-    def _prepare(self):
-        self.scr.erase()
-
-        if not self.nosep:
-            self._trim_items()
-        if self.topline:
-            self.height_offset = self._mkargspec() + 1
+        if hasattr(parent, 'docstring'):
+            self.docstring = parent.docstring
         else:
-            self.height_offset = 0
+            self.docstring = None
 
-        self._populate_v_items()
+    def _show_doc(self):
+        self.scr.resize(self.rows, self.w)
 
-    def _populate_v_items(self):
-        if self.items:
-            # visible items (we'll append until we can't fit any more in)
-            self.v_items = [self.items[0][:self.max_w - 3]]
-            self._lsize()
+        if self.down:
+            self.scr.mvwin(self.y + 1, 0)
         else:
-            self.v_items = []
+            self.scr.mvwin(self.y - self.rows - 2, 0)
 
-        for i in self.items[1:]:
-            self.v_items.append(i[:self.max_w - 3])
-            if not self._lsize():
-                del self.v_items[-1]
-                self.v_items[-1] = '...'
-                break
+        if not py3 and isinstance(self.docstring, unicode):
+            self.docstring = self.docstring.encode(encoding, 'ignore')
+        self.scr.addstr('\n' + self.docstring, app.get_colpair('comment'))
+        # XXX: After all the trouble I had with sizing the list box (I'm not very good
+        # at that type of thing) I decided to do this bit of tidying up here just to
+        # make sure there's no unnececessary blank lines, it makes things look nicer.
+
+        h = self.scr.getyx()[0] + 2
+        self.scr.resize(h, self.w)
+
+    def _show_v_items(self):
+
+        self.scr.resize(self.rows + 2, self.w)
+
+        if self.down:
+            self.scr.mvwin(self.y + 1, 0)
+        else:
+            self.scr.mvwin(self.y - self.rows - 2, 0)
+
+        self.scr.addstr('\n ')
+
+        if not py3:
+            encoding = getpreferredencoding()
+        for ix, i in enumerate(self.v_items):
+            padding = (self.wl - len(i)) * ' '
+            if ix == self.v_index:
+                color = app.get_colpair('operator')
+            else:
+                color = app.get_colpair('main')
+            if not py3:
+                i = i.encode(encoding)
+            self.scr.addstr(i + padding, color)
+            if ((self.cols == 1 or (ix and not (ix + 1) % self.cols))
+                and ix + 1 < len(self.v_items)):
+                self.scr.addstr('\n ')
+
+        h = self.scr.getyx()[0] + 2
+        self.scr.resize(h, self.w)
+
+    def _prepare_doc(self):
+        self.height_offset = self._show_topline() + 1
+
+        self.v_items = []
+        self.rows = 1
+        self.cols = 1
+        self.wl = 2
 
         if self.rows + self.height_offset < self.max_h:
             self.rows += self.height_offset
-            display_rows = self.rows
-        else:
-            display_rows = self.rows + self.height_offset
 
-        if self.topline and not self.v_items:
-            self.w = self.max_w
-        elif self.wl + 3 > self.max_w:
+        self.w = self.max_w
+
+        docstrings = self.format_docstring(self.docstring, self.max_w - 2,
+                                           self.max_h - self.height_offset)
+        self.docstring = ''.join(docstrings)
+        self.rows += len(docstrings)
+
+    def _prepare_v_items(self):
+        self.height_offset = self._show_topline() + 1
+
+        if not self.nosep:
+            self._trim_items()
+
+        self.v_items = []
+        rows = 0
+        cols = 0
+        wl = 1
+
+        v_index = self.index
+        # visible items (we'll append until we can't fit any more in)
+        for i, item in enumerate(self.items):
+            item = item[:self.max_w - 3]
+            self.v_items.append(item)
+            wl = max(len(item), wl)
+            cols = ((self.max_w - 2) // (wl + 1)) or 1
+            rows = len(self.v_items) // cols
+
+            if cols * rows < len(self.v_items):
+                rows += 1
+
+            if rows + self.height_offset - 1 >= self.max_h:
+                rows = self.max_h - (self.height_offset - 1)
+                if self.index < i - 1:
+                    del self.v_items[-1]
+                    self.v_items[-1] = '...'
+                    self.v_index = v_index
+                    break
+                else:
+                    v_index -= (len(self.v_items) - 3)
+                    self.v_items = ['...', self.items[i - 1], self.items[i]]
+                    continue
+        else:
+            rows += 1
+            self.v_index = v_index % (len(self.v_items) + 1)
+
+        self.rows = rows
+        self.cols = cols
+        self.wl = wl + 1
+
+        # debug(u"index:%d v_index:%d i:%d v_length:%d" %(self.index, self.v_index, i, len(self.v_items)))
+
+        if self.wl + 3 > self.max_w:
             self.w = self.max_w
         else:
             t = (self.cols + 1) * self.wl + 3
             if t > self.max_w:
                 t = self.max_w
             self.w = t
-
-        if self.height_offset and display_rows + 5 >= self.max_h:
-            del self.v_items[-(self.cols * self.height_offset):]
 
     def _trim_items(self):
         if self.items:
@@ -429,133 +465,153 @@ class ListBox(object):
             if sep in self.items[0]:
                 self.items = [x.rstrip(sep).rsplit(sep)[-1] for x in self.items]
 
-    def _mkargspec(self):
+    def _show_topline(self):
         """This figures out what to do with the argspec and puts it nicely into
         the list window. It returns the number of lines used to display the
         argspec.  It's also kind of messy due to it having to call so many
         addstr() to get the colouring right, but it seems to be pretty
         sturdy."""
 
-        r = 3
-        fn = self.topline[0]
-        args = self.topline[1][0]
-        kwargs = self.topline[1][3]
-        _args = self.topline[1][1]
-        _kwargs = self.topline[1][2]
-        is_bound_method = self.topline[2]
-        in_arg = self.topline[3]
-        if py3:
-            kwonly = self.topline[1][4]
-            kwonly_defaults = self.topline[1][5] or dict()
-        max_w = int(app.clirepl.scr.getmaxyx()[1] * 0.6)
         self.scr.erase()
-        self.scr.resize(3, max_w)
-        h, w = self.scr.getmaxyx()
+        r = 3
+        if self.nosep:
+            return 3
 
-        self.scr.addstr('\n  ')
-        self.scr.addstr(fn,
-                        app.get_colpair('name') | curses.A_BOLD)
-        self.scr.addstr(': (', app.get_colpair('name'))
-        max_h = app.clirepl.scr.getmaxyx()[0]
+        if self.topline is None:
+            self.scr.resize(3, self.max_w)
+            self.scr.addstr('\n  ')
+            return r
 
-        if is_bound_method and isinstance(in_arg, int):
-            in_arg += 1
+        elif isinstance(self.topline, repl.KeySpec):
+            name = self.topline[0]
 
-        punctuation_colpair = app.get_colpair('punctuation')
+            self.scr.resize(3, self.max_w)
 
-        for k, i in enumerate(args):
-            y, x = self.scr.getyx()
-            ln = len(str(i))
-            kw = None
-            if kwargs and k + 1 > len(args) - len(kwargs):
-                kw = repr(kwargs[k - (len(args) - len(kwargs))])
-                ln += len(kw) + 1
+            self.scr.addstr('\n  ')
+            self.scr.addstr(name, app.get_colpair('name') | curses.A_BOLD)
+            self.scr.addstr(': ', app.get_colpair('name'))
+            self.scr.addstr('keyword', app.get_colpair('name'))
+            return r
 
-            if ln + x >= w:
-                ty = self.scr.getbegyx()[0]
-                if not self.down and ty > 0:
-                    h += 1
-                    self.scr.mvwin(ty - 1, 1)
-                    self.scr.resize(h, w)
-                elif self.down and h + r < max_h - ty:
-                    h += 1
-                    self.scr.resize(h, w)
+        elif isinstance(self.topline, repl.ObjSpec):
+            obj_name = self.topline[0]
+            obj = self.topline[1]
+
+            self.scr.resize(3, self.max_w)
+
+            self.scr.addstr('\n  ')
+
+            if inspect.isclass(obj):
+                class_name = 'class'
+            elif hasattr(obj, '__class__'):
+                class_name = obj.__class__.__name__
+            else:
+                class_name = 'unknown'
+
+            self.scr.addstr(obj_name, app.get_colpair('name') | curses.A_BOLD)
+            self.scr.addstr(': ', app.get_colpair('name'))
+            self.scr.addstr(class_name, app.get_colpair('name'))
+            return r
+
+        elif isinstance(self.topline, repl.ArgSpec):
+            fn = self.topline[0]
+            args = self.topline[1][0]
+            kwargs = self.topline[1][3]
+            _args = self.topline[1][1]
+            _kwargs = self.topline[1][2]
+            is_bound_method = self.topline[2]
+            in_arg = self.topline[3]
+            if py3:
+                kwonly = self.topline[1][4]
+                kwonly_defaults = self.topline[1][5] or dict()
+            self.scr.resize(3, self.max_w)
+            h, w = self.scr.getmaxyx()
+
+            self.scr.addstr('\n  ')
+            self.scr.addstr(fn,
+                            app.get_colpair('name') | curses.A_BOLD)
+            self.scr.addstr(': (', app.get_colpair('name'))
+            max_h = app.clirepl.scr.getmaxyx()[0]
+
+            if is_bound_method and isinstance(in_arg, int):
+                in_arg += 1
+
+            punctuation_colpair = app.get_colpair('punctuation')
+
+            for k, i in enumerate(args):
+                y, x = self.scr.getyx()
+                ln = len(str(i))
+                kw = None
+                if kwargs and k + 1 > len(args) - len(kwargs):
+                    kw = repr(kwargs[k - (len(args) - len(kwargs))])
+                    ln += len(kw) + 1
+
+                if ln + x >= w:
+                    ty = self.scr.getbegyx()[0]
+                    if not self.down and ty > 0:
+                        h += 1
+                        self.scr.mvwin(ty - 1, 1)
+                        self.scr.resize(h, w)
+                    elif self.down and h + r < max_h - ty:
+                        h += 1
+                        self.scr.resize(h, w)
+                    else:
+                        break
+                    r += 1
+                    self.scr.addstr('\n\t')
+
+                if str(i) == 'self' and k == 0:
+                    color = app.get_colpair('name')
                 else:
-                    break
-                r += 1
-                self.scr.addstr('\n\t')
+                    color = app.get_colpair('token')
 
-            if str(i) == 'self' and k == 0:
-                color = app.get_colpair('name')
-            else:
-                color = app.get_colpair('token')
+                if k == in_arg or i == in_arg:
+                    color |= curses.A_BOLD
 
-            if k == in_arg or i == in_arg:
-                color |= curses.A_BOLD
+                if not py3:
+                    # See issue #138: We need to format tuple unpacking correctly
+                    # We use the undocumented function inspection.strseq() for
+                    # that. Fortunately, that madness is gone in Python 3.
+                    self.scr.addstr(inspect.strseq(i, str), color)
+                else:
+                    self.scr.addstr(str(i), color)
+                if kw is not None:
+                    self.scr.addstr('=', punctuation_colpair)
+                    self.scr.addstr(kw, app.get_colpair('token'))
+                if k != len(args) - 1:
+                    self.scr.addstr(', ', punctuation_colpair)
 
-            if not py3:
-                # See issue #138: We need to format tuple unpacking correctly
-                # We use the undocumented function inspection.strseq() for
-                # that. Fortunately, that madness is gone in Python 3.
-                self.scr.addstr(inspect.strseq(i, str), color)
-            else:
-                self.scr.addstr(str(i), color)
-            if kw is not None:
-                self.scr.addstr('=', punctuation_colpair)
-                self.scr.addstr(kw, app.get_colpair('token'))
-            if k != len(args) - 1:
-                self.scr.addstr(', ', punctuation_colpair)
-
-        if _args:
-            if args:
-                self.scr.addstr(', ', punctuation_colpair)
-            self.scr.addstr('*%s' % (_args, ),
-                            app.get_colpair('token'))
-
-        if py3 and kwonly:
-            if not _args:
+            if _args:
                 if args:
                     self.scr.addstr(', ', punctuation_colpair)
-                self.scr.addstr('*', punctuation_colpair)
-            marker = object()
-            for arg in kwonly:
-                self.scr.addstr(', ', punctuation_colpair)
-                color = app.get_colpair('token')
-                if arg == in_arg:
-                    color |= curses.A_BOLD
-                self.scr.addstr(arg, color)
-                default = kwonly_defaults.get(arg, marker)
-                if default is not marker:
-                    self.scr.addstr('=', punctuation_colpair)
-                    self.scr.addstr(repr(default),
-                                    app.get_colpair('token'))
+                self.scr.addstr('*%s' % (_args, ),
+                                app.get_colpair('token'))
 
-        if _kwargs:
-            if args or _args or (py3 and kwonly):
-                self.scr.addstr(', ', punctuation_colpair)
-            self.scr.addstr('**%s' % (_kwargs, ),
-                            app.get_colpair('token'))
-        self.scr.addstr(')', punctuation_colpair)
-        return r
+            if py3 and kwonly:
+                if not _args:
+                    if args:
+                        self.scr.addstr(', ', punctuation_colpair)
+                    self.scr.addstr('*', punctuation_colpair)
+                marker = object()
+                for arg in kwonly:
+                    self.scr.addstr(', ', punctuation_colpair)
+                    color = app.get_colpair('token')
+                    if arg == in_arg:
+                        color |= curses.A_BOLD
+                    self.scr.addstr(arg, color)
+                    default = kwonly_defaults.get(arg, marker)
+                    if default is not marker:
+                        self.scr.addstr('=', punctuation_colpair)
+                        self.scr.addstr(repr(default),
+                                        app.get_colpair('token'))
 
-    def _lsize(self):
-        wl = max(len(i) for i in self.v_items) + 1
-        if not wl:
-            wl = 1
-        cols = ((self.max_w - 2) // wl) or 1
-        rows = len(self.v_items) // cols
-
-        if cols * rows < len(self.v_items):
-            rows += 1
-
-        if rows + 2 >= self.max_h:
-            rows = self.max_h - 2
-            return False
-
-        self.rows = rows
-        self.cols = cols
-        self.wl = wl
-        return True
+            if _kwargs:
+                if args or _args or (py3 and kwonly):
+                    self.scr.addstr(', ', punctuation_colpair)
+                self.scr.addstr('**%s' % (_kwargs, ),
+                                app.get_colpair('token'))
+            self.scr.addstr(')', punctuation_colpair)
+            return r
 
 
 class Editable(object):
@@ -565,7 +621,7 @@ class Editable(object):
         self.scr = scr
         self.config = config
         self.s = ''
-        self.cut_buffer = []
+        self.cut_buffer = clipboard
         self.cpos = 0
         self.do_exit = False
         self.last_key_press = time.time()
@@ -634,8 +690,6 @@ class Editable(object):
         while True:
             key = self.get_key()
             if self.p_key(key) is None:
-            #                if self.config.cli_trim_prompts and self.s.startswith(self.ps1):
-            #                    self.s = self.s[4:]
                 return self.s
 
     def addstr(self, s):
@@ -1015,6 +1069,7 @@ class CLIRepl(repl.Repl, Editable):
 
         self.list_box = ListBox(app.newwin(1, 1, 1, 1), config, format_docstring=self.format_docstring)
 
+    @property
     def current_line(self):
         """Return the current line."""
         return self.s
@@ -1025,6 +1080,7 @@ class CLIRepl(repl.Repl, Editable):
         traceback."""
         self.s = ''
 
+    @property
     def current_word(self):
         """Return the current word, i.e. the (incomplete) word directly to the
         left of the cursor"""
@@ -1066,9 +1122,8 @@ class CLIRepl(repl.Repl, Editable):
         return result
 
     def backward_kill_word(self):
-        result = Editable.backward_kill_word(self)
+        Editable.backward_kill_word(self)
         self.complete()
-        return result
 
     def backward_kill_line(self):
         Editable.backward_kill_line(self)
@@ -1090,30 +1145,25 @@ class CLIRepl(repl.Repl, Editable):
             for _ in xrange(self.next_indentation()):
                 self.p_key('\t')
         self.cpos = 0
-        return Editable.get_line(self)
+        Editable.get_line(self)
+        if self.config.cli_trim_prompts and self.s.startswith(self.ps1):
+            self.s = self.s[len(self.ps1):]
+        return self.s
 
     def complete(self, tab=False):
         """Get Autcomplete list and window."""
         if self.in_search_mode == "search":
             self.search_history()
-            return
         elif self.in_search_mode == "reverse":
             self.reverse_search_history()
-            return
-
-        if self.paste_mode and self.list_win_visible:
-            self.scr.touchwin()
-
-        if self.paste_mode:
-            return
-
-        if self.list_win_visible and not self.config.auto_display_list:
+        elif self.paste_mode:
+            if self.list_win_visible:
+                self.scr.touchwin()
+        elif self.list_win_visible and not self.config.auto_display_list:
             self.scr.touchwin()
             self.list_win_visible = False
             self.matches_iter.update()
-            return
-
-        if self.config.auto_display_list or tab:
+        elif self.config.auto_display_list or tab:
             self.list_win_visible = repl.Repl.complete(self, tab)
             if self.list_win_visible:
                 try:
@@ -1150,8 +1200,6 @@ class CLIRepl(repl.Repl, Editable):
         self.rl_history.enter(self.s)
         s = self.rl_history.back().rstrip().split()[-1]
         self.addstr(s)
-
-    #        self.print_line(self.s, clr=True)
 
     def previous_history(self):
         """Replace the active line with previous line in history and
@@ -1398,15 +1446,29 @@ class CLIRepl(repl.Repl, Editable):
         self.list_box.show()
         app.statusbar.scr.touchwin()
         app.statusbar.scr.noutrefresh()
-        app.clirepl.scr.touchwin()
-        app.clirepl.scr.cursyncup()
-        app.clirepl.scr.noutrefresh()
+        self.scr.touchwin()
+        self.scr.cursyncup()
+        self.scr.noutrefresh()
 
         # This looks a little odd, but I can't figure a better way to stick the cursor
         # back where it belongs (refreshing the window hides the list_win)
 
-        app.clirepl.scr.move(*app.clirepl.scr.getyx())
+        self.scr.move(*self.scr.getyx())
         self.list_box.refresh()
+
+    # def show_next_page(self):
+    #     self.list_box.next_page(self.matches_iter)
+    #     app.statusbar.scr.touchwin()
+    #     app.statusbar.scr.noutrefresh()
+    #     app.clirepl.scr.touchwin()
+    #     app.clirepl.scr.cursyncup()
+    #     app.clirepl.scr.noutrefresh()
+    #
+    #     # This looks a little odd, but I can't figure a better way to stick the cursor
+    #     # back where it belongs (refreshing the window hides the list_win)
+    #
+    #     app.clirepl.scr.move(*app.clirepl.scr.getyx())
+    #     self.list_box.refresh()
 
     def size(self):
         """Set instance attributes for x and y top left corner coordinates
@@ -1464,7 +1526,7 @@ class CLIRepl(repl.Repl, Editable):
             if not self.config.auto_display_list and not self.list_win_visible:
                 return True
 
-            current_word = self.current_string() or self.current_word()
+            current_word = self.current_string or self.current_word
             if not current_word:
                 return True
         else:
@@ -1500,12 +1562,10 @@ class CLIRepl(repl.Repl, Editable):
 
             if back:
                 current_match = self.matches_iter.previous()
-                self.list_box.v_index -= 1
-                self.list_box.index -= 1
             else:
                 current_match = self.matches_iter.next()
-                self.list_box.v_index += 1
-                self.list_box.index += 1
+
+            self.list_box.sync(self.matches_iter)
 
             if self.in_search_mode:
                 self.rl_history.index = self.rl_indices[self.matches_iter.index]
@@ -1517,6 +1577,16 @@ class CLIRepl(repl.Repl, Editable):
                         self.list_box.nosep = True
                         self.show_list_box()
                     else:
+                        if not self.get_args(current_match):
+                            if keyword.iskeyword(current_match):
+                                self.argspec = repl.KeySpec([current_match])
+                            else:
+                                try:
+                                    obj = app.clirepl.get_object(current_match)
+                                    self.argspec = repl.ObjSpec([current_match, obj])
+                                except (SyntaxError, NameError):
+                                    self.argspec = None
+                        self.list_box.topline = self.argspec
                         self.show_list_box()
                 except curses.error:
                     # XXX: This is a massive hack, it will go away when I get
@@ -1997,8 +2067,9 @@ class App(object):
 
         return c
 
-    def getstdout(self):
-        return self.clirepl.getstdout()
+    @property
+    def stdout(self):
+        return self.clirepl.stdout
 
     def refresh(self):
         self.clirepl.scr.refresh()
@@ -2043,7 +2114,7 @@ def main_curses(scr, args, config, interactive=True, locals_=None,
     """
     with App(scr, locals_, config) as app:
         exit_value = app.run(args, interactive, banner)
-        return (exit_value, app.getstdout())
+        return (exit_value, app.stdout)
 
 
 def main(args=None, locals_=None, banner=None):

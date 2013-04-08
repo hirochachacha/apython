@@ -49,6 +49,15 @@ if py3:
     basestring = str
 
 
+class ObjSpec(list): pass
+
+
+class KeySpec(list): pass
+
+
+class ArgSpec(list): pass
+
+
 class Interpreter(code.InteractiveInterpreter):
     def __init__(self, locals=None, encoding=None):
         """The syntaxerror callback can be set at any time and will be called
@@ -141,6 +150,7 @@ class MatchesIterator(object):
         else:
             self.matches = []
         self.index = -1
+        self.is_wait = False
 
     def __nonzero__(self):
         return self.index != -1
@@ -156,11 +166,18 @@ class MatchesIterator(object):
             raise ValueError('No current match.')
         return self.matches[self.index]
 
+    def wait(self):
+        self.is_wait = True
+
     def next(self):
-        self.index = (self.index + 1) % len(self.matches)
+        if self.is_wait:
+            self.is_wait = False
+        else:
+            self.index = (self.index + 1) % len(self.matches)
         return self.matches[self.index]
 
     def previous(self):
+        self.is_wait = False
         if self.index <= 0:
             self.index = len(self.matches)
         self.index -= 1
@@ -251,7 +268,7 @@ class Repl(object):
         self.matches = []
         self.matches_iter = MatchesIterator()
         self.argspec = None
-        self.current_func = None
+        self.current_callable = None
         self.list_win_visible = False
         self._C = {}
         self.interact = Interaction(self.config)
@@ -274,6 +291,7 @@ class Repl(object):
     def history(self):
         return self.stdin_history
 
+    @property
     def current_line(self):
         raise (NotImplementedError("current_line should be implemented in subclass"))
 
@@ -282,6 +300,7 @@ class Repl(object):
         It prevents autoindentation from occuring after a traceback."""
         raise (NotImplementedError("clear_current_line should be implemented in subclass"))
 
+    @property
     def current_word(self):
         raise (NotImplementedError("current_word should be implemented in subclass"))
 
@@ -320,12 +339,14 @@ class Repl(object):
                     else:
                         self.interp.runsource(f.read(), filename, 'exec', encode=False)
 
-    def getstdout(self):
+    @property
+    def stdout(self):
         return str(self.stdout_history)
 
-    def current_string(self, concatenate=False):
+    @property
+    def current_string(self):
         """If the line ends in a string get it, otherwise return ''"""
-        tokens = self.tokenize(self.current_line())
+        tokens = self.tokenize(self.current_line)
         string_tokens = list(takewhile(token_is_any_of([Token.String,
                                                         Token.Text]),
                                        reversed(tokens)))
@@ -343,8 +364,7 @@ class Repl(object):
                 opening = None
             elif value == opening:
                 opening = None
-                if not concatenate:
-                    string = list()
+                string = list()
             else:
                 string.append(value)
 
@@ -360,12 +380,12 @@ class Repl(object):
                 obj = getattr(obj, attributes.pop(0))
         return obj
 
-    def get_args(self):
+    def get_args(self, line):
         """Check if an unclosed parenthesis exists, then attempt to get the
         argspec() for it. On success, update self.argspec and return True,
         otherwise set self.argspec to None and return False"""
 
-        self.current_func = None
+        self.current_callable = None
 
         if not self.config.arg_spec:
             return False
@@ -374,8 +394,7 @@ class Repl(object):
         # the arguments
         stack = [['', 0, '']]
         try:
-            for (token, value) in PythonLexer().get_tokens(
-                    self.current_line()):
+            for (token, value) in PythonLexer().get_tokens(line):
                 if token is Token.Punctuation:
                     if value in '([{':
                         stack.append(['', 0, value])
@@ -415,34 +434,41 @@ class Repl(object):
         except (AttributeError, NameError, SyntaxError):
             return False
 
-        if inspect.isclass(f):
-            try:
-                if f.__init__ is not object.__init__:
-                    f = f.__init__
-            except AttributeError:
-                return None
-        self.current_func = f
+        if inspection.is_callable(f):
+            if inspect.isclass(f):
+                try:
+                    if f.__init__ is not object.__init__:
+                        f = f.__init__
+                except AttributeError:
+                    return None
+            self.current_callable = f
 
-        self.argspec = inspection.getargspec(func, f)
-        if self.argspec:
-            self.argspec.append(arg_number)
+            self.argspec = inspection.getargspec(func, f)
+            if self.argspec:
+                self.argspec.append(arg_number)
+                self.argspec = ArgSpec(self.argspec)
+                return True
+            return False
+        else:
+            raise
+            objspec = [func, f]
+            self.argspec = ObjSpec(objspec)
             return True
-        return False
 
-    def get_current_object(self):
+    @property
+    def current_object(self):
         """Return the object which is bound to the
         current name in the current input line. Return `None` if the
         source cannot be found."""
+        obj = None
         try:
-            obj = self.current_func
-            if obj is None:
-                line = self.current_line()
-                if inspection.is_eval_safe_name(line):
-                    obj = self.get_object(line)
+            line = self.current_line
+            if inspection.is_eval_safe_name(line):
+                obj = self.get_object(line)
         except (AttributeError, IOError, NameError, TypeError):
-            return None
-        else:
-            return obj
+            obj = None
+
+        return obj
 
     def complete(self, tab=False):
         """Construct a full list of possible completions and construct and
@@ -450,11 +476,11 @@ class Repl(object):
         (via the inspect module) and bang that on top of the completions too.
         The return value is whether the list_win is visible or not."""
         self.docstring = None
-        if not self.get_args():
+        if not self.get_args(self.current_line):
             self.argspec = None
-        elif self.current_func is not None:
+        elif self.current_callable is not None:
             try:
-                self.docstring = pydoc.getdoc(self.current_func)
+                self.docstring = pydoc.getdoc(self.current_callable)
             except IndexError:
                 self.docstring = None
             else:
@@ -463,28 +489,29 @@ class Repl(object):
                 if not self.docstring:
                     self.docstring = None
 
-        current_word = self.current_word()
-        cs = self.current_string()
+        current_word = self.current_word
+        current_string = self.current_string
+
         if not current_word:
             self.matches = []
             self.matches_iter.update()
-        if not (current_word or cs):
+        if not (current_word or current_string):
             return bool(self.argspec)
 
-        if cs and tab:
+        if current_string and tab:
             # Filename completion
-            self.matches = list()
-            username = cs.split(os.path.sep, 1)[0]
+            self.matches = []
+            username = current_string.split(os.path.sep, 1)[0]
             user_dir = os.path.expanduser(username)
-            for filename in glob(os.path.expanduser(cs + '*')):
+            for filename in glob(os.path.expanduser(current_string + '*')):
                 if os.path.isdir(filename):
                     filename += os.path.sep
-                if cs.startswith('~'):
+                if current_string.startswith('~'):
                     filename = username + filename[len(user_dir):]
                 self.matches.append(filename)
-            self.matches_iter.update(cs, self.matches)
+            self.matches_iter.update(current_string, self.matches)
             return bool(self.matches)
-        elif cs:
+        elif current_string:
             # Do not provide suggestions inside strings, as one cannot tab
             # them so they would be really confusing.
             self.matches_iter.update()
@@ -492,7 +519,7 @@ class Repl(object):
 
         # Check for import completion
         e = False
-        matches = importcompletion.complete(self.current_line(), current_word)
+        matches = importcompletion.complete(self.current_line, current_word)
         if matches is not None and not matches:
             self.matches = []
             self.matches_iter.update()
@@ -512,7 +539,7 @@ class Repl(object):
                 matches = self.completer.matches
                 if (self.config.complete_magic_methods and self.buffer and
                         self.buffer[0].startswith("class ") and
-                        self.current_line().lstrip().startswith("def ")):
+                        self.current_line.lstrip().startswith("def ")):
                     matches.extend(name for name in self.config.magic_methods
                                    if name.startswith(current_word))
 
@@ -626,7 +653,7 @@ class Repl(object):
                 self.interact.notify('Save cancelled.')
                 return
 
-        s = self.formatforfile(self.getstdout())
+        s = self.formatforfile(self.stdout)
 
         try:
             f = open(fn, mode)

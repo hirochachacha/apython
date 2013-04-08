@@ -28,7 +28,9 @@ import __builtin__
 import rlcompleter
 import re
 import keyword
+import inspect
 from bpython.completion import inspection
+from bpython._py3compat import  py3
 
 # Needed for special handling of __abstractmethods__
 # abc only exists since 2.6, so check both that it exists and that it's
@@ -85,28 +87,46 @@ class Autocomplete(rlcompleter.Completer):
         """Second half of original attr_matches method factored out so it can
         be wrapped in a safe try/finally block in case anything bad happens to
         restore the original __getattribute__ method."""
-        words = dir(obj)
+        # words = dir(obj)
+        # if hasattr(obj, '__class__'):
+        #     words.append('__class__')
+        #     words += rlcompleter.get_class_members(obj.__class__)
+        #     if has_abc and not isinstance(obj.__class__, abc.ABCMeta):
+        #         try:
+        #             words.remove('__abstractmethods__')
+        #         except ValueError:
+        #             pass
+
+        words = []
+        for k, v in inspect.getmembers(obj):
+            words.append(self._callable_postfix(v, k))
+
         if hasattr(obj, '__class__'):
-            words.append('__class__')
-            words += rlcompleter.get_class_members(obj.__class__)
-            if has_abc and not isinstance(obj.__class__, abc.ABCMeta):
-                try:
-                    words.remove('__abstractmethods__')
-                except ValueError:
-                    pass
+            for k, v in inspect.getmembers(obj.__class__):
+                words.append(self._callable_postfix(v, k))
+
+        if hasattr(obj, '__class__') and has_abc and not isinstance(obj.__class__, abc.ABCMeta):
+            try:
+                words.remove('__abstractmethods__')
+            except ValueError:
+                pass
 
         matches = []
         n = len(attr)
         for word in words:
             if self.method_match(word, n, attr) and word != "__builtins__":
                 matches.append("%s.%s" % (expr, word))
-        return matches
+        return sorted(matches)
 
     def _callable_postfix(self, value, word):
         """rlcompleter's _callable_postfix done right."""
         with inspection.AttrCleaner(value):
             if inspection.is_callable(value):
-                word += '('
+                if not py3:
+                    if value != basestring:
+                        word += '('
+                else:
+                    word += '('
         return word
 
     def global_matches(self, text):
@@ -115,17 +135,16 @@ class Autocomplete(rlcompleter.Completer):
         defined in self.namespace that match.
         """
 
-        hash = {}
+        words = set()
         n = len(text)
         for word in keyword.kwlist:
             if self.method_match(word, n, text):
-                hash[word] = 1
+                words.add(word)
         for nspace in [__builtin__.__dict__, self.namespace]:
             for word, val in nspace.items():
                 if self.method_match(word, len(text), text) and word != "__builtins__":
-                    hash[self._callable_postfix(val, word)] = 1
-        matches = hash.keys()
-        matches.sort()
+                    words.add(self._callable_postfix(val, word))
+        matches = sorted(words)
         return matches
 
     def method_match(self, word, size, text):

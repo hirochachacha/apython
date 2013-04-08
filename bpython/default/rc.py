@@ -8,20 +8,20 @@ import bpython
 from bpython.key.dispatch_table import dispatch_table
 
 
-@dispatch_table.set_handler_on('F2')
+@dispatch_table.set_handler_on_clirepl('F2')
 def do_show_source(dispatcher):
     from bpython.translations import _
-    obj = dispatcher.repl.get_current_object()
+    obj = dispatcher.owner.current_object
     if obj is not None:
         show_source(obj)
     else:
-        dispatcher.repl.statusbar.message(_('Cannot show source.'))
+        dispatcher.owner.interact.notify(_('Cannot show source.'))
     return ''
 
 
-@dispatch_table.set_handler_on('F9')
+@dispatch_table.set_handler_on_clirepl('F9')
 def do_pager(dispatcher):
-    page(dispatcher.repl.getstdout())
+    page(dispatcher.owner.stdout)
     return ''
 
 

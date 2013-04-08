@@ -191,6 +191,10 @@ class Dispatcher(object):
 
     @dispatch_table.set_handler_on_clirepl('C-r')
     def do_reverse_search_history(self):
+        # if self.owner.in_search_mode == "reverse" and self.owner.s:
+        #     self.owner.show_next_page()
+        # else:
+        #     self.owner.reverse_search_history()
         self.owner.reverse_search_history()
         return ''
 

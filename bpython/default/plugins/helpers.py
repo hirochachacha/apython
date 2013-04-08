@@ -53,9 +53,9 @@ def invoke_editor(file_name, line_number, reloading):
             editor_invocation = _editor_name(*args)
         elif isinstance(_editor_name, str):
             editor_invocation = "%s %s %s" % (
-                    _editor_name,
-                    blocking_flag_for_editor(_editor_name, reloading) or "",
-                    start_line_syntax_for_editor(_editor_name, file_name, line_number)
+                _editor_name,
+                blocking_flag_for_editor(_editor_name, reloading) or "",
+                start_line_syntax_for_editor(_editor_name, file_name, line_number)
             )
         else:
             raise
@@ -63,7 +63,7 @@ def invoke_editor(file_name, line_number, reloading):
         if editor_invocation:
             return editor_invocation
     else:
-        raise(CommandError("Please set config.editor or export $VISUAL or $EDITOR"))
+        raise (CommandError("Please set config.editor or export $VISUAL or $EDITOR"))
 
 
 def blocking_flag_for_editor(_editor_name, block):
