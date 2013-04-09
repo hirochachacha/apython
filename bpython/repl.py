@@ -34,19 +34,24 @@ import textwrap
 import traceback
 from glob import glob
 from itertools import takewhile
-from locale import getpreferredencoding
+import locale
 
 from pygments.token import Token
 
-import bpython
 from bpython.completion import importcompletion, inspection
-from bpython._py3compat import PythonLexer, py3
-from bpython.completion.autocomplete import Autocomplete
+from bpython.completion.completer import Completer
 from bpython.history import History
 
+from bpython._py3compat import PythonLexer, PY3
+from six import callable
 
-if py3:
+
+if PY3:
     basestring = str
+
+
+def getpreferredencoding():
+    return locale.getpreferredencoding() or sys.getdefaultencoding()
 
 
 class ObjSpec(list): pass
@@ -73,7 +78,7 @@ class Interpreter(code.InteractiveInterpreter):
         # Unfortunately code.InteractiveInterpreter is a classic class, so no super()
         code.InteractiveInterpreter.__init__(self, locals)
 
-    if not py3:
+    if not PY3:
 
         def runsource(self, source, filename='<input>', symbol='single',
                       encode=True):
@@ -102,7 +107,7 @@ class Interpreter(code.InteractiveInterpreter):
                 pass
             else:
                 # Stuff in the right filename and right lineno
-                if not py3:
+                if not PY3:
                     lineno -= 1
                 value = SyntaxError(msg, (filename, lineno, offset, line))
                 sys.last_value = value
@@ -121,7 +126,7 @@ class Interpreter(code.InteractiveInterpreter):
             tblist = traceback.extract_tb(tb)
             del tblist[:1]
             # Set the right lineno (encoding header adds an extra line)
-            if not py3:
+            if not PY3:
                 for i, (filename, lineno, module, something) in enumerate(tblist):
                     if filename == '<input>':
                         tblist[i] = (filename, lineno - 1, module, something)
@@ -264,7 +269,7 @@ class Repl(object):
         self.stdin_history = History()
         self.stdout_history = History()
         self.evaluating = False
-        self.completer = Autocomplete(self.interp.locals, config)
+        self.completer = Completer(self.interp.locals, config)
         self.matches = []
         self.matches_iter = MatchesIterator()
         self.argspec = None
@@ -277,8 +282,6 @@ class Repl(object):
         # Necessary to fix mercurial.ui.ui expecting sys.stderr to have this
         # attribute
         self.closed = False
-
-        bpython.running = self
 
         pythonhist = os.path.expanduser(self.config.hist_file)
         if os.path.exists(pythonhist):
@@ -324,7 +327,7 @@ class Repl(object):
         config_dir = os.path.expanduser('~/.bpython')
         rc = os.path.join(config_dir, 'rc.py')
 
-        if py3:
+        if PY3:
             self.interp.runsource("import sys; sys.path.append('%s')" % default_dir, default_dir, 'exec')
             self.interp.runsource("sys.path.append('%s'); del sys" % config_dir, config_dir, 'exec')
         else:
@@ -334,7 +337,7 @@ class Repl(object):
         for filename in [startup, default_rc, rc]:
             if filename and os.path.isfile(filename):
                 with open(filename, 'r') as f:
-                    if py3:
+                    if PY3:
                         self.interp.runsource(f.read(), filename, 'exec')
                     else:
                         self.interp.runsource(f.read(), filename, 'exec', encode=False)
@@ -434,7 +437,7 @@ class Repl(object):
         except (AttributeError, NameError, SyntaxError):
             return False
 
-        if inspection.is_callable(f):
+        if callable(f):
             if inspect.isclass(f):
                 try:
                     if f.__init__ is not object.__init__:
@@ -478,7 +481,7 @@ class Repl(object):
         self.docstring = None
         if not self.get_args(self.current_line):
             self.argspec = None
-        elif self.current_callable is not None:
+        if self.current_callable is not None:
             try:
                 self.docstring = pydoc.getdoc(self.current_callable)
             except IndexError:
@@ -496,7 +499,7 @@ class Repl(object):
             self.matches = []
             self.matches_iter.update()
         if not (current_word or current_string):
-            return bool(self.argspec)
+            return bool(self.argspec or self.docstring)
 
         if current_string and tab:
             # Filename completion
@@ -530,11 +533,13 @@ class Repl(object):
             try:
                 self.completer.complete(current_word, 0)
             except Exception:
+                e = sys.exc_info()[1]
+                raise e
                 # This sucks, but it's either that or list all the exceptions that could
                 # possibly be raised here, so if anyone wants to do that, feel free to send me
                 # a patch. XXX: Make sure you raise here if you're debugging the completion
                 # stuff !
-                e = True
+                # e = True
             else:
                 matches = self.completer.matches
                 if (self.config.complete_magic_methods and self.buffer and
@@ -546,7 +551,7 @@ class Repl(object):
         if not e and self.argspec:
             matches.extend(name + '=' for name in self.argspec[1][0]
                            if isinstance(name, basestring) and name.startswith(current_word))
-            if py3:
+            if PY3:
                 matches.extend(name + '=' for name in self.argspec[1][4]
                                if name.startswith(current_word))
 
@@ -680,8 +685,9 @@ class Repl(object):
                 self.rl_history.append(s)
                 try:
                     self.rl_history.save(histfilename, getpreferredencoding(), self.config.hist_length)
-                except EnvironmentError, err:
-                    self.interact.notify("Error occured while writing to file %s (%s) " % (histfilename, err.strerror))
+                except EnvironmentError:
+                    e = sys.exc_info()[1]
+                    self.interact.notify("Error occured while writing to file %s (%s) " % (histfilename, e.strerror))
                     self.rl_history.entries = oldhistory
                     self.rl_history.append(s)
             else:

@@ -34,11 +34,15 @@
     - py3: True if the hosting Python runtime is of Python version 3 or later
 """
 
-import sys
+__all__ = ['PY3', 'chr', 'PythonLexer']
 
-py3 = (sys.version_info[0] == 3)
 
-if py3:
+import six
+
+PY3 = six.PY3
+chr = six.int2byte
+
+if PY3:
     from pygments.lexers import Python3Lexer as PythonLexer
 else:
     from pygments.lexers import PythonLexer

@@ -41,7 +41,8 @@ except ImportError:
         finally:
             warnings.filters = filters
 
-from bpython._py3compat import py3
+from bpython._py3compat import PY3
+from six import next
 
 # The cached list of all known modules
 modules = set()
@@ -127,7 +128,7 @@ def find_modules(path):
             if name.endswith(suffix[0]):
                 name = name[:-len(suffix[0])]
                 break
-        if py3 and name == "badsyntax_pep3120":
+        if PY3 and name == "badsyntax_pep3120":
             # Workaround for issue #166
             continue
         try:
@@ -162,7 +163,7 @@ def find_all_modules(path=None):
         if not p:
             p = os.curdir
         for module in find_modules(p):
-            if not py3 and not isinstance(module, unicode):
+            if not PY3 and not isinstance(module, unicode):
                 try:
                     module = module.decode(sys.getfilesystemencoding())
                 except UnicodeDecodeError:
@@ -179,7 +180,7 @@ def find_coroutine():
         return None
 
     try:
-        find_iterator.next()
+        next(find_iterator)
     except StopIteration:
         fully_loaded = True
 

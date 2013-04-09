@@ -28,6 +28,8 @@ from __future__ import with_statement
 import codecs
 import itertools
 
+from six import next
+
 
 class History(object):
     def __init__(self, entries=None, allow_duplicates=True, ignore_blank=True):
@@ -108,12 +110,12 @@ class History(object):
 
     def back(self, start=False, search=False):
         """Move one step back in the history."""
-        return self.back_iter(start, search).next()[0]
+        return next(self.back_iter(start, search))[0]
 
     def forward(self, start=False, search=False):
         """Move one step forward in the history."""
         try:
-            return self.forward_iter(start, search).next()[0]
+            return next(self.forward_iter(start, search))[0]
         except StopIteration:
             return ""
 

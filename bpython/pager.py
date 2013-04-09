@@ -35,7 +35,7 @@ import pygments
 from pygments.formatters import TerminalFormatter
 from pygments.lexers import PythonLexer
 
-from bpython._py3compat import py3
+from bpython._py3compat import PY3
 
 
 __all__ = ['page']
@@ -61,7 +61,7 @@ def page(data, use_internal=False, use_hilight=False):
                 PythonLexer(encoding=sys.__stdout__.encoding).get_tokens(data),
                 TerminalFormatter(encoding=sys.__stdout__.encoding)
         )
-    if not py3:
+    if not PY3:
         if isinstance(data, unicode):
             data = data.encode(sys.__stdout__.encoding, 'replace')
 
@@ -73,18 +73,21 @@ def page(data, use_internal=False, use_hilight=False):
             popen = subprocess.Popen(command, stdin=subprocess.PIPE)
             popen.stdin.write(data)
             popen.stdin.close()
-        except OSError, e:
+        except OSError:
+            e = sys.exc_info()[1]
             if e.errno == errno.ENOENT:
                 # pager command not found, fall back to internal pager
                 page_internal(data)
                 return
-        except IOError, e:
+        except IOError:
+            e = sys.exc_info()[1]
             if e.errno != errno.EPIPE:
                 raise
         while True:
             try:
                 popen.wait()
-            except OSError, e:
+            except OSError:
+                e = sys.exc_info()[1]
                 if e.errno != errno.EINTR:
                     raise
             else:

@@ -15,6 +15,7 @@ paste_time = 0.02
 syntax = True
 tab_length = 4
 save_append_py = False
+word_delimiter =  !"#$%%&'()*+,-./:;<=>?@[\]^_`{|} ~
 editor =
 
 [cli]

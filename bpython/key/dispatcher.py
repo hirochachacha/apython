@@ -6,6 +6,8 @@ from bpython.key.dispatch_table import (dispatch_table, CannotFindHandler)
 import unicodedata
 import curses
 
+from six import u
+
 
 class Dispatcher(object):
     def __init__(self, owner):
@@ -21,9 +23,9 @@ class Dispatcher(object):
     def run(self, key):
         if self.meta:
             try:
-                key = "M-%s" % curses.keyname(ord(key))
+                key = u("M-") + u(curses.keyname(ord(key)))
             except TypeError:
-                key = "M-%s" % key
+                key = u("M-") + key
             self.meta = False
 
         if self.raw:
@@ -106,7 +108,7 @@ class Dispatcher(object):
 
     @dispatch_table.set_handler_on('M-y')
     def do_yank_pop(self):
-        if self.previous_key in ['', 'M-y']:
+        if self.previous_key in [u(''), u('M-y')]:
             self.owner.yank_pop(self.yank_index)
             self.yank_index -= 1
         return ''

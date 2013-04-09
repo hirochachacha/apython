@@ -6,11 +6,11 @@ import pprint
 
 from bpython.pager import page as _page
 from bpython.config import config
-from bpython._py3compat import py3
+from bpython._py3compat import PY3
 
 
 def page(data):
-    if py3:
+    if PY3:
         if not isinstance(data, str):
             data = pprint.pformat(data)
     else:

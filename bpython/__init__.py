@@ -32,4 +32,4 @@ def embed(locals_=None, args=None, banner=None):
     return main(args, locals_, banner)
 
 
-running = None #load REPL instance
+running = None

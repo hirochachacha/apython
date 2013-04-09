@@ -52,6 +52,8 @@ import math
 import re
 import time
 
+import bpython
+
 import keyword
 
 import struct
@@ -63,6 +65,7 @@ if platform.system() != 'Windows':
 import unicodedata
 import errno
 
+import inspect
 import locale
 from types import ModuleType
 
@@ -73,8 +76,7 @@ from bpython.formatter import BPythonFormatter
 
 # This for completion
 from bpython.completion import importcompletion
-from bpython.completion import autocomplete
-from bpython.completion import inspection
+from bpython.completion import completer
 
 # This for config
 from bpython.config.struct import Struct
@@ -84,13 +86,12 @@ from bpython import translations
 from bpython.translations import _
 
 from bpython import repl
-from bpython._py3compat import PythonLexer, py3
+from bpython.repl import getpreferredencoding
 from bpython.formatter import Parenthesis
 import bpython.config.args
 
-
-if not py3:
-    import inspect
+from bpython._py3compat import PythonLexer, PY3, chr
+from six.moves import map, xrange
 
 
 # --- module globals ---
@@ -98,11 +99,9 @@ app = None
 clipboard = []
 # ---
 
+
 def debug(s):
     app.clirepl.interact.notify(s)
-
-def getpreferredencoding():
-    return locale.getpreferredencoding() or sys.getdefaultencoding()
 
 
 class FakeStream(object):
@@ -193,7 +192,7 @@ class FakeStdin(object):
                 self.buffer.append(rest)
             buffer = buffer[:size]
 
-        if py3:
+        if PY3:
             return buffer
         else:
             return buffer.encode(getpreferredencoding())
@@ -227,20 +226,6 @@ class FakeDict(object):
 
     def __getitem__(self, k):
         return self._val
-
-
-# TODO:
-#
-# Tab completion does not work if not at the end of the line.
-#
-# Numerous optimisations can be made but it seems to do all the lookup stuff
-# fast enough on even my crappy server so I'm not too bothered about that
-# at the moment.
-#
-# The popup window that displays the argspecs and completion suggestions
-# needs to be an instance of a ListWin class or something so I can wrap
-# the addstr stuff to a higher level.
-#
 
 
 class CLIInteraction(repl.Interaction):
@@ -316,9 +301,9 @@ class ListBox(object):
         self.scr.border()
         self.scr.refresh()
 
-    def reset_with(self, parent, items, topline=None, nosep=False):
-        y, x = parent.scr.getyx()
-        h, w = parent.scr.getmaxyx()
+    def reset_with(self, repl, nosep=False):
+        y, x = repl.scr.getyx()
+        h, w = repl.scr.getmaxyx()
         down = (y < h // 2)
         if down:
             max_h = h - y
@@ -326,16 +311,16 @@ class ListBox(object):
             max_h = y + 1
         max_w = int(w * self.config.cli_suggestion_width)
 
-        self.items = items
-        self.topline = topline
         self.nosep = nosep
         self.down = down
         self.max_h = max_h
         self.max_w = max_w
         self.y = y
         self.index = -1
-        if hasattr(parent, 'docstring'):
-            self.docstring = parent.docstring
+        self.items = repl.matches
+        self.topline = repl.argspec
+        if hasattr(repl, 'docstring'):
+            self.docstring = repl.docstring
         else:
             self.docstring = None
 
@@ -347,7 +332,7 @@ class ListBox(object):
         else:
             self.scr.mvwin(self.y - self.rows - 2, 0)
 
-        if not py3 and isinstance(self.docstring, unicode):
+        if not PY3 and isinstance(self.docstring, unicode):
             self.docstring = self.docstring.encode(encoding, 'ignore')
         self.scr.addstr('\n' + self.docstring, app.get_colpair('comment'))
         # XXX: After all the trouble I had with sizing the list box (I'm not very good
@@ -368,7 +353,7 @@ class ListBox(object):
 
         self.scr.addstr('\n ')
 
-        if not py3:
+        if not PY3:
             encoding = getpreferredencoding()
         for ix, i in enumerate(self.v_items):
             padding = (self.wl - len(i)) * ' '
@@ -376,7 +361,7 @@ class ListBox(object):
                 color = app.get_colpair('operator')
             else:
                 color = app.get_colpair('main')
-            if not py3:
+            if not PY3:
                 i = i.encode(encoding)
             self.scr.addstr(i + padding, color)
             if ((self.cols == 1 or (ix and not (ix + 1) % self.cols))
@@ -521,7 +506,7 @@ class ListBox(object):
             _kwargs = self.topline[1][2]
             is_bound_method = self.topline[2]
             in_arg = self.topline[3]
-            if py3:
+            if PY3:
                 kwonly = self.topline[1][4]
                 kwonly_defaults = self.topline[1][5] or dict()
             self.scr.resize(3, self.max_w)
@@ -568,7 +553,7 @@ class ListBox(object):
                 if k == in_arg or i == in_arg:
                     color |= curses.A_BOLD
 
-                if not py3:
+                if not PY3:
                     # See issue #138: We need to format tuple unpacking correctly
                     # We use the undocumented function inspection.strseq() for
                     # that. Fortunately, that madness is gone in Python 3.
@@ -587,7 +572,7 @@ class ListBox(object):
                 self.scr.addstr('*%s' % (_args, ),
                                 app.get_colpair('token'))
 
-            if py3 and kwonly:
+            if PY3 and kwonly:
                 if not _args:
                     if args:
                         self.scr.addstr(', ', punctuation_colpair)
@@ -606,7 +591,7 @@ class ListBox(object):
                                         app.get_colpair('token'))
 
             if _kwargs:
-                if args or _args or (py3 and kwonly):
+                if args or _args or (PY3 and kwonly):
                     self.scr.addstr(', ', punctuation_colpair)
                 self.scr.addstr('**%s' % (_kwargs, ),
                                 app.get_colpair('token'))
@@ -622,6 +607,7 @@ class Editable(object):
         self.config = config
         self.s = ''
         self.cut_buffer = clipboard
+        self.word_delimiter = set(config.word_delimiter)
         self.cpos = 0
         self.do_exit = False
         self.last_key_press = time.time()
@@ -648,7 +634,7 @@ class Editable(object):
         while True:
             try:
                 key += self.scr.getkey()
-                if py3:
+                if PY3:
                     # Seems like we get a in the locale's encoding
                     # encoded string in Python 3 as well, but of
                     # type str instead of bytes, hence convert it to
@@ -727,7 +713,7 @@ class Editable(object):
             if i == 1:
                 width = s_width[- self.cpos - 1]
             else:
-                for _ in range(i):
+                for _ in xrange(i):
                     self.mvc(1)
         elif i == 0:
             return False
@@ -735,7 +721,7 @@ class Editable(object):
             if i == -1:
                 width = - s_width[- self.cpos]
             else:
-                for _ in range(-i):
+                for _ in xrange(-i):
                     self.mvc(-1)
 
         h, w = App.gethw()
@@ -750,13 +736,6 @@ class Editable(object):
 
         self.cpos += i
         self.scr.move(y, x - width)
-        #        if self.cpos == 0:
-        #            self.interact.notify(u"width: %s cpos: %s current_w: %d i: %d" % ( unicode(s_width), unicode(self.cpos), 0, i) )
-        #        else:
-        #            try:
-        #                self.interact.notify(u"width: %s cpos: %s current_w: %d i: %d" % ( unicode(s_width), unicode(self.cpos), s_width[- self.cpos], i) )
-        #            except:
-        #                self.interact.notify(u"width: %s cpos: %s current_w: %d i: %d" % ( unicode(s_width), unicode(self.cpos), 0, i) )
 
         if refresh:
             self.scr.refresh()
@@ -792,7 +771,7 @@ class Editable(object):
         uses the formatting method as defined in formatter.py to parse the
         srings. It won't update the screen if it's reevaluating the code (as it
         does with undo)."""
-        if not py3 and isinstance(s, unicode):
+        if not PY3 and isinstance(s, unicode):
             s = s.encode(getpreferredencoding())
 
         a = app.get_colpair('output')
@@ -863,7 +842,7 @@ class Editable(object):
         if self.cpos:
             t = self.cpos
             self.cpos = 0
-            for _ in range(t):
+            for _ in xrange(t):
                 self.mvc(1)
 
     def reprint_line(self, lineno, tokens):
@@ -903,11 +882,11 @@ class Editable(object):
             pass
         else:
             pos = len(self.s) - self.cpos - 1
-            while pos >= 0 and self.s[pos] == ' ':
+            while pos >= 0 and self.s[pos] in self.word_delimiter:
                 pos -= 1
                 self.backward_character()
                 # Then we delete a full word.
-            while pos >= 0 and self.s[pos] != ' ':
+            while pos >= 0 and self.s[pos] not in self.word_delimiter:
                 pos -= 1
                 self.backward_character()
 
@@ -917,11 +896,11 @@ class Editable(object):
         else:
             len_s = len(self.s)
             pos = len_s - self.cpos - 1
-            while len_s > pos and self.s[pos] == ' ':
+            while len_s > pos and self.s[pos] in self.word_delimiter:
                 pos += 1
                 self.forward_character()
                 # Then we delete a full word.
-            while len_s > pos and self.s[pos] != ' ':
+            while len_s > pos and self.s[pos] not in self.word_delimiter:
                 pos += 1
                 self.forward_character()
 
@@ -961,11 +940,11 @@ class Editable(object):
             deleted = []
             len_s = len(self.s)
             pos = len_s - self.cpos
-            while self.cpos > 0 and self.s[pos] == ' ':
+            while self.cpos > 0 and self.s[pos] in self.word_delimiter:
                 deleted.append(self.s[pos])
                 self.delete_character()
                 # Then we delete a full word.
-            while self.cpos > 0 and self.s[pos] != ' ':
+            while self.cpos > 0 and self.s[pos] not in self.word_delimiter:
                 deleted.append(self.s[pos])
                 self.delete_character()
             self.cut_buffer.append(''.join(deleted))
@@ -977,11 +956,11 @@ class Editable(object):
             pos = len(self.s) - self.cpos - 1
             deleted = []
             # First we delete any space to the left of the cursor.
-            while pos >= 0 and self.s[pos] == ' ':
+            while pos >= 0 and self.s[pos] in self.word_delimiter:
                 deleted.append(self.s[pos])
                 pos -= self.backward_delete_character()
                 # Then we delete a full word.
-            while pos >= 0 and self.s[pos] != ' ':
+            while pos >= 0 and self.s[pos] not in self.word_delimiter:
                 deleted.append(self.s[pos])
                 pos -= self.backward_delete_character()
             self.cut_buffer.append(''.join(reversed(deleted)))
@@ -1036,7 +1015,7 @@ class Editable(object):
 
     def yank_pop(self, yank_index):
         """Paste the text from the cut buffer at the current cursor location"""
-        for _ in range(len(self.cut_buffer[(yank_index + 1) % len(self.cut_buffer)])):
+        for _ in xrange(len(self.cut_buffer[(yank_index + 1) % len(self.cut_buffer)])):
             self.backward_delete_character()
         self.addstr(self.cut_buffer[yank_index % len(self.cut_buffer)])
         self.print_line(self.s, clr=True)
@@ -1046,7 +1025,7 @@ class Editable(object):
         cursor position and move appropriately so it doesn't clear
         the current line after the cursor."""
         if self.cpos:
-            for _ in range(self.cpos):
+            for _ in xrange(self.cpos):
                 self.mvc(-1)
 
         # Reprint the line (as there was maybe a highlighted paren in it)
@@ -1096,7 +1075,7 @@ class CLIRepl(repl.Repl, Editable):
         if not self.s or not is_method_char(self.s[l - 1]):
             return
 
-        for i in range(1, l + 1):
+        for i in xrange(1, l + 1):
             if not is_method_char(self.s[-i]):
                 i -= 1
                 break
@@ -1167,7 +1146,7 @@ class CLIRepl(repl.Repl, Editable):
             self.list_win_visible = repl.Repl.complete(self, tab)
             if self.list_win_visible:
                 try:
-                    self.reset_and_show_list_box(self.matches, topline=self.argspec)
+                    self.reset_and_show_list_box()
                 except curses.error:
                     # XXX: This is a massive hack, it will go away when I get
                     # cusswords into a good enough state that we can start
@@ -1238,7 +1217,7 @@ class CLIRepl(repl.Repl, Editable):
         if self.s and len(self.matches) > 0:
             self.print_line(self.s, clr=True)
             try:
-                self.reset_and_show_list_box(self.matches, nosep=True)
+                self.reset_and_show_list_box(nosep=True)
             except curses.error:
                 # XXX: This is a massive hack, it will go away when I get
                 # cusswords into a good enough state that we can start
@@ -1248,7 +1227,7 @@ class CLIRepl(repl.Repl, Editable):
         else:
             self.redraw()
 
-        self.interact.notify(u"mode: %s" % "reverse-search")
+        self.interact.notify("mode: %s" % "reverse-search")
         self.in_search_mode = "reverse"
 
     def search_history(self):
@@ -1268,7 +1247,7 @@ class CLIRepl(repl.Repl, Editable):
         if self.s and len(self.matches) > 0:
             self.print_line(self.s, clr=True)
             try:
-                self.reset_and_show_list_box(self.matches, nosep=True)
+                self.reset_and_show_list_box(nosep=True)
             except curses.error:
                 # XXX: This is a massive hack, it will go away when I get
                 # cusswords into a good enough state that we can start
@@ -1278,7 +1257,7 @@ class CLIRepl(repl.Repl, Editable):
         else:
             self.redraw()
 
-        self.interact.notify(u"mode: %s" % "search")
+        self.interact.notify("mode: %s" % "search")
         self.in_search_mode = "search"
 
     def exit_search_mode(self):
@@ -1304,7 +1283,8 @@ class CLIRepl(repl.Repl, Editable):
         curses.raw(False)
         try:
             return repl.Repl.push(self, s, insert_into_history)
-        except SystemExit, e:
+        except SystemExit:
+            e = sys.exc_info()[1]
             # Avoid a traceback on e.g. quit()
             self.do_exit = True
             self.exit_value = e.args
@@ -1344,7 +1324,7 @@ class CLIRepl(repl.Repl, Editable):
 
             self.history.append(inp)
             self.s_hist[-1] += self.f_string
-            if py3:
+            if PY3:
                 self.stdout_history[-1] += inp
             else:
                 self.stdout_history[-1] += inp.encode(getpreferredencoding())
@@ -1393,7 +1373,7 @@ class CLIRepl(repl.Repl, Editable):
 
         self.iy, self.ix = self.scr.getyx()
         for line in self.history:
-            if py3:
+            if PY3:
                 self.stdout_history[-1] += line
             else:
                 self.stdout_history[-1] += line.encode(getpreferredencoding())
@@ -1430,7 +1410,7 @@ class CLIRepl(repl.Repl, Editable):
         else:
             t = s
 
-        if not py3 and isinstance(t, unicode):
+        if not PY3 and isinstance(t, unicode):
             t = t.encode(getpreferredencoding())
 
         self.stdout_history.append(t)
@@ -1438,8 +1418,8 @@ class CLIRepl(repl.Repl, Editable):
         self.echo(s)
         self.s_hist.append(s.rstrip())
 
-    def reset_and_show_list_box(self, items, topline=None, nosep=False):
-        self.list_box.reset_with(self, items, topline, nosep)
+    def reset_and_show_list_box(self, nosep=False):
+        self.list_box.reset_with(self, nosep)
         self.show_list_box()
 
     def show_list_box(self):
@@ -1534,7 +1514,7 @@ class CLIRepl(repl.Repl, Editable):
 
         # 3. check to see if we can expand the current word
         cseq = None
-        if mode == autocomplete.SUBSTRING:
+        if mode == completer.SUBSTRING:
             if all([len(match.split(current_word)) == 2 for match in self.matches]):
                 seq = [current_word + match.split(current_word)[1] for match in self.matches]
                 cseq = os.path.commonprefix(seq)
@@ -1542,7 +1522,7 @@ class CLIRepl(repl.Repl, Editable):
             seq = self.matches
             cseq = os.path.commonprefix(seq)
 
-        if cseq and mode != autocomplete.FUZZY:
+        if cseq and mode != completer.FUZZY:
             expanded_string = cseq[len(current_word):]
             self.s += expanded_string
             expanded = bool(expanded_string)
@@ -1584,7 +1564,7 @@ class CLIRepl(repl.Repl, Editable):
                                 try:
                                     obj = app.clirepl.get_object(current_match)
                                     self.argspec = repl.ObjSpec([current_match, obj])
-                                except (SyntaxError, NameError):
+                                except (SyntaxError, NameError, AttributeError):
                                     self.argspec = None
                         self.list_box.topline = self.argspec
                         self.show_list_box()
@@ -1594,7 +1574,7 @@ class CLIRepl(repl.Repl, Editable):
                     # using it.
                     self.list_box.refresh()
 
-                if self.config.autocomplete_mode == autocomplete.SIMPLE:
+                if self.config.autocomplete_mode == completer.SIMPLE:
                     self.s += current_match[len(current_word):]
                 elif self.in_search_mode:
                     self.s = current_match
@@ -1656,7 +1636,7 @@ class CLIRepl(repl.Repl, Editable):
                     else:
                         stack.append((line, len(line_tokens) - 1,
                                       line_tokens, value))
-                elif value in parens.itervalues():
+                elif value in parens.values():
                     saved_stack = list(stack)
                     try:
                         while True:
@@ -1821,7 +1801,7 @@ class Statusbar(Editable):
             self.c = c
 
         if s:
-            if not py3 and isinstance(s, unicode):
+            if not PY3 and isinstance(s, unicode):
                 s = s.encode(getpreferredencoding())
 
             if self.c:
@@ -1846,7 +1826,7 @@ class App(object):
 
     def __init__(self, scr, locals_, config):
         global app
-        app = self
+        app = bpython.running = self
 
         self.scr = scr
         self.config = config
@@ -2003,7 +1983,6 @@ class App(object):
     def init_wins(self):
         """Initialise the two windows (the main repl interface and the little
         status bar at the bottom with some stuff in it)"""
-        #TODO: Document better what stuff is on the status bar.
 
         self.scr.timeout(300)
 
@@ -2021,7 +2000,6 @@ class App(object):
         except curses.error:
             cols = FakeDict(-1)
 
-        # FIXME: Gargh, bad design results in using globals without a refactor :(
         self.colors = cols
 
     def get_colpair(self, name):
@@ -2058,7 +2036,7 @@ class App(object):
                      ]
             )
 
-        for i in range(63):
+        for i in xrange(63):
             if i > 7:
                 j = i // 8
             else:
@@ -2080,7 +2058,8 @@ class App(object):
             exit_value = 0
             try:
                 bpython.config.args.exec_code(self.interpreter, args)
-            except SystemExit, e:
+            except SystemExit:
+                e = sys.exc_info()[1]
                 # The documentation of code.InteractiveInterpreter.runcode claims
                 # that it reraises SystemExit. However, I can't manage to trigger
                 # that. To be one the safe side let's catch SystemExit here anyway.
@@ -2134,8 +2113,6 @@ def main(args=None, locals_=None, banner=None):
 
 
 if __name__ == '__main__':
-    from bpython.cli import main
-
     sys.exit(main())
 
 # vim: sw=4 ts=4 sts=4 ai et

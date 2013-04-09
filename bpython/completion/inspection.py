@@ -31,20 +31,10 @@ import types
 
 from pygments.token import Token
 
-from bpython._py3compat import PythonLexer, py3
+from bpython._py3compat import PythonLexer, PY3
 
-try:
-    collections.Callable
-    has_collections_callable = True
-except AttributeError:
-    has_collections_callable = False
-try:
-    types.InstanceType
-    has_instance_type = True
-except AttributeError:
-    has_instance_type = False
 
-if not py3:
+if not PY3:
     _name = re.compile(r'[a-zA-Z_]\w*$')
 
 
@@ -70,7 +60,7 @@ class AttrCleaner(object):
         # original methods. :-(
         # The upshot being that introspecting on an object to display its
         # attributes will avoid unwanted side-effects.
-        if py3 or type_ != types.InstanceType:
+        if PY3 or type_ != types.InstanceType:
             __getattr__ = getattr(type_, '__getattr__', None)
             if __getattr__ is not None:
                 try:
@@ -119,14 +109,14 @@ def parsekeywordpairs(signature):
     parendepth = 0
     for token, value in tokens:
         if preamble:
-            if token is Token.Punctuation and value == u"(":
+            if token is Token.Punctuation and value == "(":
                 preamble = False
             continue
 
         if token is Token.Punctuation:
-            if value in [u'(', u'{', u'[']:
+            if value in ['(', '{', '[']:
                 parendepth += 1
-            elif value in [u')', u'}', u']']:
+            elif value in [')', '}', ']']:
                 parendepth -= 1
             elif value == ':' and parendepth == -1:
                 # End of signature reached
@@ -233,7 +223,7 @@ def getargspec(func, f):
         # '__init__' throws xmlrpclib.Fault (see #202)
         return None
     try:
-        if py3:
+        if PY3:
             argspec = inspect.getfullargspec(f)
         else:
             argspec = inspect.getargspec(f)
@@ -253,7 +243,7 @@ def getargspec(func, f):
 
 
 def is_eval_safe_name(string):
-    if py3:
+    if PY3:
         return all(part.isidentifier() and not keyword.iskeyword(part)
                    for part in string.split('.'))
     else:
@@ -261,11 +251,3 @@ def is_eval_safe_name(string):
                    for part in string.split('.'))
 
 
-def is_callable(obj):
-    if has_instance_type and isinstance(obj, types.InstanceType):
-        # Work around a CPython bug, see CPython issue #7624
-        return callable(obj)
-    elif has_collections_callable:
-        return isinstance(obj, collections.Callable)
-    else:
-        return callable(obj)

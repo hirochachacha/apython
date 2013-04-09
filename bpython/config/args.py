@@ -88,10 +88,9 @@ def parse_and_load(config, args, extras=None, ignore_stdin=False):
         os.execv(sys.executable, [sys.executable] + args)
 
     if options.version:
-        print 'bpython version', __version__,
-        print 'on top of Python', sys.version.split()[0]
-        print ('(C) 2008-2012 Bob Farrell, Andreas Stuehrk et al. '
-               'See AUTHORS for detail.')
+        print('bpython version %s on top of Python %s' % (__version__, sys.version.split()[0]))
+        print('(C) 2008-2012 Bob Farrell, Andreas Stuehrk et al.')
+        print('See AUTHORS for detail.')
         raise SystemExit
 
     if not ignore_stdin and not (sys.stdin.isatty() and sys.stdout.isatty()):

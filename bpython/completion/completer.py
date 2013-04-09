@@ -24,19 +24,22 @@
 # THE SOFTWARE.
 #
 
-import __builtin__
 import rlcompleter
 import re
 import keyword
 import inspect
 from bpython.completion import inspection
-from bpython._py3compat import  py3
+from bpython._py3compat import PY3
+from six.moves import builtins
+from six import callable
+
 
 # Needed for special handling of __abstractmethods__
 # abc only exists since 2.6, so check both that it exists and that it's
 # the one we're expecting
 try:
     import abc
+
     abc.ABCMeta
     has_abc = True
 except (ImportError, AttributeError):
@@ -47,13 +50,13 @@ SIMPLE = 'simple'
 SUBSTRING = 'substring'
 FUZZY = 'fuzzy'
 
-class Autocomplete(rlcompleter.Completer):
-    """
-    """
+WITHOUT_CALLABLE_POSTFIX = set(['basestring'])
 
-    def __init__(self, namespace = None, config = None):
-        rlcompleter.Completer.__init__(self, namespace)
-        self.locals = namespace
+
+class Completer(rlcompleter.Completer):
+    def __init__(self, locals_=None, config=None):
+        rlcompleter.Completer.__init__(self, locals_)
+        self.locals = locals_
         if hasattr(config, 'autocomplete_mode'):
             if config.autocomplete_mode in ['simple', 'fuzzy', 'substring']:
                 self.autocomplete_mode = config.autocomplete_mode
@@ -61,6 +64,24 @@ class Autocomplete(rlcompleter.Completer):
                 raise
         else:
             self.autocomplete_mode = SUBSTRING
+
+    def global_matches(self, text):
+        """Compute matches when text is a simple name.
+        Return a list of all keywords, built-in functions and names currently
+        defined in self.locals that match.
+        """
+
+        words = set()
+        n = len(text)
+        for word in keyword.kwlist:
+            if self._method_match(word, n, text):
+                words.add(word)
+        for nspace in [builtins.__dict__, self.locals]:
+            for word, val in nspace.items():
+                if self._method_match(word, len(text), text) and word != "__builtins__":
+                    words.add(self._callable_postfix(val, word))
+        matches = sorted(words)
+        return matches
 
     def attr_matches(self, text):
         """Taken from rlcompleter.py and bent to my will.
@@ -78,24 +99,19 @@ class Autocomplete(rlcompleter.Completer):
             # Special case: float literal, using attrs here will result in
             # a SyntaxError
             return []
-        obj = eval(expr, self.locals)
-        with inspection.AttrCleaner(obj):
-            matches = self.attr_lookup(obj, expr, attr)
-        return matches
+        try:
+            obj = eval(expr, self.locals)
+        except (NameError, SyntaxError):
+            return []
+        else:
+            with inspection.AttrCleaner(obj):
+                matches = self._attr_lookup(obj, expr, attr)
+            return matches
 
-    def attr_lookup(self, obj, expr, attr):
+    def _attr_lookup(self, obj, expr, attr):
         """Second half of original attr_matches method factored out so it can
         be wrapped in a safe try/finally block in case anything bad happens to
         restore the original __getattribute__ method."""
-        # words = dir(obj)
-        # if hasattr(obj, '__class__'):
-        #     words.append('__class__')
-        #     words += rlcompleter.get_class_members(obj.__class__)
-        #     if has_abc and not isinstance(obj.__class__, abc.ABCMeta):
-        #         try:
-        #             words.remove('__abstractmethods__')
-        #         except ValueError:
-        #             pass
 
         words = []
         for k, v in inspect.getmembers(obj):
@@ -114,46 +130,30 @@ class Autocomplete(rlcompleter.Completer):
         matches = []
         n = len(attr)
         for word in words:
-            if self.method_match(word, n, attr) and word != "__builtins__":
+            if self._method_match(word, n, attr) and word != "__builtins__":
                 matches.append("%s.%s" % (expr, word))
         return sorted(matches)
 
     def _callable_postfix(self, value, word):
         """rlcompleter's _callable_postfix done right."""
         with inspection.AttrCleaner(value):
-            if inspection.is_callable(value):
-                if not py3:
-                    if value != basestring:
+            if callable(value):
+                if not PY3:
+                    if word not in WITHOUT_CALLABLE_POSTFIX:
                         word += '('
                 else:
                     word += '('
         return word
 
-    def global_matches(self, text):
-        """Compute matches when text is a simple name.
-        Return a list of all keywords, built-in functions and names currently
-        defined in self.namespace that match.
-        """
-
-        words = set()
-        n = len(text)
-        for word in keyword.kwlist:
-            if self.method_match(word, n, text):
-                words.add(word)
-        for nspace in [__builtin__.__dict__, self.namespace]:
-            for word, val in nspace.items():
-                if self.method_match(word, len(text), text) and word != "__builtins__":
-                    words.add(self._callable_postfix(val, word))
-        matches = sorted(words)
-        return matches
-
-    def method_match(self, word, size, text):
+    def _method_match(self, word, size, text):
         if self.autocomplete_mode == SIMPLE:
             return word[:size] == text
         elif self.autocomplete_mode == SUBSTRING:
             s = r'.*%s.*' % text
             return re.search(s, word)
-        else:
+        elif self.autocomplete_mode == FUZZY:
             s = r'.*%s.*' % '.*'.join(list(text))
             return re.search(s, word)
+        else:
+            raise
 

@@ -10,6 +10,7 @@ import curses
 import sys
 import errno
 from bpython.config import config
+from six import callable
 
 
 EMACS_CLIENT = re.compile(r'^emacsclient')
@@ -142,7 +143,8 @@ def invoke_command(command):
     curses.endwin()
     try:
         subprocess.call(command)
-    except OSError, e:
+    except OSError:
+        e = sys.exc_info()[1]
         raise e
     finally:
         curses.doupdate()
@@ -156,18 +158,21 @@ def invoke_command_with_input(command, inputs):
             inputs = inputs.encode(sys.__stdout__.encoding, 'replace')
         popen.stdin.write(inputs)
         popen.stdin.close()
-    except OSError, e:
+    except OSError:
+        e = sys.exc_info()[1]
         if e.errno == errno.ENOENT:
             # pager command not found, fall back to internal pager
             sys.stdout.write(inputs)
             return
-    except IOError, e:
+    except IOError:
+        e = sys.exc_info()[1]
         if e.errno != errno.EPIPE:
             raise
     while True:
         try:
             popen.wait()
-        except OSError, e:
+        except OSError:
+            e = sys.exc_info()[1]
             if e.errno != errno.EINTR:
                 raise
         else:

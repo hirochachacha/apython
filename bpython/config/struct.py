@@ -4,29 +4,28 @@
 from __future__ import with_statement
 import os
 import sys
-from ConfigParser import ConfigParser
 from itertools import chain
+from six.moves import configparser
 
 
 __all__ = ['loadini', 'Struct', 'default_config_path']
 
-
 DEFAULT_COLORS = {
-        'keyword': 'y',
-        'name': 'c',
-        'comment': 'b',
-        'string': 'm',
-        'error': 'r',
-        'number': 'G',
-        'operator': 'Y',
-        'punctuation': 'y',
-        'token': 'C',
-        'background': 'd',
-        'output': 'w',
-        'main': 'c',
-        'paren': 'R',
-        'prompt': 'c',
-        'prompt_more': 'g',
+    'keyword': 'y',
+    'name': 'c',
+    'comment': 'b',
+    'string': 'm',
+    'error': 'r',
+    'number': 'G',
+    'operator': 'Y',
+    'punctuation': 'y',
+    'token': 'C',
+    'background': 'd',
+    'output': 'w',
+    'main': 'c',
+    'paren': 'R',
+    'prompt': 'c',
+    'prompt_more': 'g',
 }
 
 
@@ -54,7 +53,7 @@ def _loadini(struct, configfile):
         # back to old config, though.
         config_path = os.path.expanduser('~/.bpython/config')
 
-    config = ConfigParser()
+    config = configparser.ConfigParser()
 
     config.read(os.path.join(os.path.dirname(os.path.dirname(__file__)), "default", "config"))
 
@@ -85,7 +84,7 @@ def _loadini(struct, configfile):
         struct.cli_suggestion_width = 0.8
 
     struct.cli_trim_prompts = config.getboolean('cli',
-                                                  'trim_prompts')
+                                                'trim_prompts')
     struct.complete_magic_methods = config.getboolean('general',
                                                       'complete_magic_methods')
     methods = config.get('general', 'magic_methods')
@@ -93,6 +92,7 @@ def _loadini(struct, configfile):
     struct.autocomplete_mode = config.get('general', 'autocomplete_mode')
     struct.save_append_py = config.getboolean('general', 'save_append_py')
     struct.editor = config.get('general', 'editor')
+    struct.word_delimiter = config.get('general', 'word_delimiter')
     color_scheme_name = config.get('general', 'color_scheme')
 
     if color_scheme_name == 'default':
@@ -113,7 +113,7 @@ def _populate_color_scheme(struct, color_scheme_name):
         old_path = os.path.expanduser(os.path.join('~/.bpython',
                                                    theme_filename))
         default_path = os.path.join(
-                os.path.dirname(__file__), "default", theme_filename)
+            os.path.dirname(__file__), "default", theme_filename)
 
         for path in [path, old_path, default_path]:
             try:
@@ -124,12 +124,12 @@ def _populate_color_scheme(struct, color_scheme_name):
                 break
         else:
             sys.stderr.write("Could not load theme '%s'.\n" %
-                                                         (color_scheme_name, ))
+                             (color_scheme_name, ))
             sys.exit(1)
 
 
 def _load_theme(path, colors):
-    theme = ConfigParser()
+    theme = configparser.ConfigParser()
     with open(path, 'r') as f:
         theme.readfp(f)
     for k, v in chain(theme.items('syntax'), theme.items('interface')):
@@ -139,7 +139,7 @@ def _load_theme(path, colors):
             colors[k] = theme.get('interface', k)
 
     # Check against default theme to see if all values are defined
-    for k, v in DEFAULT_COLORS.iteritems():
+    for k, v in DEFAULT_COLORS.items():
         if k not in colors:
             colors[k] = v
     f.close()
