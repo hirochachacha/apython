@@ -30,6 +30,7 @@ import inspect
 import os
 import pydoc
 import sys
+import re
 import textwrap
 import traceback
 from glob import glob
@@ -50,6 +51,58 @@ if PY3:
     basestring = str
 
 
+WORD = re.compile(r'\S+')
+
+
+def command_tokenize(line):
+    result = ['']
+    in_quote = False
+    quote_type = None
+    for c in line:
+        if c == ' ':
+            if not in_quote:
+                if result[-1] == '':
+                    pass
+                else:
+                    result.append('')
+            else:
+                result[-1] += c
+        elif c in ['"', "'"]:
+            if not in_quote:
+                in_quote = True
+                quote_type = c
+                result[-1] += c
+            else:
+                if c == quote_type:
+                    in_quote = False
+                    quote_type = None
+                    result[-1] += c
+                else:
+                    result[-1] += c
+        elif c == "(":
+            if not in_quote:
+                in_quote = True
+                quote_type = c
+                result[-1] += c
+            else:
+                result[-1] += c
+        elif c == ")":
+            if not in_quote:
+                in_quote = True
+                quote_type = c
+                result[-1] += c
+            else:
+                if quote_type == "(":
+                    in_quote = False
+                    quote_type = None
+                    result[-1] += c
+                else:
+                    result[-1] += c
+        else:
+            result[-1] += c
+    return result
+
+
 def getpreferredencoding():
     return locale.getpreferredencoding() or sys.getdefaultencoding()
 
@@ -58,6 +111,9 @@ class ObjSpec(list): pass
 
 
 class KeySpec(list): pass
+
+
+class CommandSpec(list): pass
 
 
 class ArgSpec(list): pass
@@ -73,10 +129,13 @@ class Interpreter(code.InteractiveInterpreter):
         specifically, this is so that autoindentation does not occur after a
         traceback."""
 
+        self.command_table = {}
         self.encoding = encoding or sys.getdefaultencoding()
         self.syntaxerror_callback = None
         # Unfortunately code.InteractiveInterpreter is a classic class, so no super()
         code.InteractiveInterpreter.__init__(self, locals)
+
+        self.locals['__command_table'] = self.command_table
 
     if not PY3:
 
@@ -145,6 +204,68 @@ class Interpreter(code.InteractiveInterpreter):
         fancy."""
         for line in lines:
             self.write(line)
+
+    def register_command(self, name, function):
+        if name not in self.command_table:
+            self.command_table[name] = function
+            return True
+        else:
+            return False
+
+    def is_commandline(self, line):
+        try:
+            if not PY3 and isinstance(line, unicode):
+                encoding = getpreferredencoding()
+                words = map(lambda s: s.decode(encoding), command_tokenize(line.encode(encoding)))
+            else:
+                words = command_tokenize(line)
+        except ValueError:
+            return False
+        else:
+            if len(words) > 0:
+                command_name = words[0]
+                return command_name in self.command_table
+            else:
+                return False
+
+    def get_command_spec(self, line):
+        try:
+            if not PY3 and isinstance(line, unicode):
+                encoding = getpreferredencoding()
+                words = map(lambda s: s.decode(encoding), command_tokenize(line.encode(encoding)))
+            else:
+                words = command_tokenize(line)
+        except ValueError:
+            pass
+        else:
+            if len(words) > 0:
+                command_name = words[0]
+                if command_name in self.command_table:
+                    return [command_name, self.command_table[command_name]]
+
+    def runcommand(self, line):
+        try:
+            if not PY3 and isinstance(line, unicode):
+                encoding = getpreferredencoding()
+                words = map(lambda s: s.decode(encoding), command_tokenize(line.encode(encoding)))
+            else:
+                words = command_tokenize(line)
+        except ValueError:
+            pass
+        else:
+            if len(words) > 0:
+                command_name = words[0]
+                if command_name in self.command_table:
+                    source = "__command_table['%s'](%s)" % (command_name, ','.join(words[1:]))
+                    self.runsource(source)
+
+    def get_object(self, name):
+        attributes = name.split('.')
+        obj = eval(attributes.pop(0), self.locals)
+        while attributes:
+            with inspection.AttrCleaner(obj):
+                obj = getattr(obj, attributes.pop(0))
+        return obj
 
 
 class MatchesIterator(object):
@@ -279,6 +400,7 @@ class Repl(object):
         self.interact = Interaction(self.config)
         self.ps1 = '>>> '
         self.ps2 = '... '
+
         # Necessary to fix mercurial.ui.ui expecting sys.stderr to have this
         # attribute
         self.closed = False
@@ -287,6 +409,18 @@ class Repl(object):
         if os.path.exists(pythonhist):
             self.rl_history.load(pythonhist,
                                  getpreferredencoding() or "ascii")
+
+
+    def register_command(self, name, function=None, without_completion=False):
+        def inner(function, name=name):
+            if not name:
+                name = function.__name__.replace('_', '-')
+            if self.interp.register_command(name, function) and not without_completion:
+                self.completer.register_command(name)
+        if not function:
+            return inner
+        else:
+            return inner(function, name)
 
 
     #alias
@@ -329,12 +463,23 @@ class Repl(object):
 
         if PY3:
             self.interp.runsource("import sys; sys.path.append('%s')" % default_dir, default_dir, 'exec')
-            self.interp.runsource("sys.path.append('%s'); del sys" % config_dir, config_dir, 'exec')
         else:
             self.interp.runsource("import sys; sys.path.append('%s')" % default_dir, default_dir, 'exec', encode=False)
-            self.interp.runsource("sys.path.append('%s'); del sys" % config_dir, config_dir, 'exec', encode=False)
 
-        for filename in [startup, default_rc, rc]:
+        for filename in [startup, default_rc]:
+            if filename and os.path.isfile(filename):
+                with open(filename, 'r') as f:
+                    if PY3:
+                        self.interp.runsource(f.read(), filename, 'exec')
+                    else:
+                        self.interp.runsource(f.read(), filename, 'exec', encode=False)
+
+        if PY3:
+            self.interp.runsource("sys.path.pop(); sys.path.append('%s'); del sys" % config_dir, config_dir, 'exec')
+        else:
+            self.interp.runsource("sys.path.pop(); sys.path.append('%s'); del sys" % config_dir, config_dir, 'exec', encode=False)
+
+        for filename in [rc]:
             if filename and os.path.isfile(filename):
                 with open(filename, 'r') as f:
                     if PY3:
@@ -376,14 +521,9 @@ class Repl(object):
         return ''.join(string)
 
     def get_object(self, name):
-        attributes = name.split('.')
-        obj = eval(attributes.pop(0), self.interp.locals)
-        while attributes:
-            with inspection.AttrCleaner(obj):
-                obj = getattr(obj, attributes.pop(0))
-        return obj
+        return self.interp.get_object(name)
 
-    def get_args(self, line):
+    def set_argspec(self, line):
         """Check if an unclosed parenthesis exists, then attempt to get the
         argspec() for it. On success, update self.argspec and return True,
         otherwise set self.argspec to None and return False"""
@@ -453,7 +593,6 @@ class Repl(object):
                 return True
             return False
         else:
-            raise
             objspec = [func, f]
             self.argspec = ObjSpec(objspec)
             return True
@@ -479,7 +618,7 @@ class Repl(object):
         (via the inspect module) and bang that on top of the completions too.
         The return value is whether the list_win is visible or not."""
         self.docstring = None
-        if not self.get_args(self.current_line):
+        if not self.set_argspec(self.current_line):
             self.argspec = None
         if self.current_callable is not None:
             try:
@@ -531,15 +670,20 @@ class Repl(object):
         if matches is None:
             # Nope, no import, continue with normal completion
             try:
-                self.completer.complete(current_word, 0)
+                if len(self.buffer) == 0 and len(WORD.findall(self.current_line)) == 1:
+                    self.completer.complete(current_word, 0, with_command=True)
+                else:
+                    self.completer.complete(current_word, 0)
+            except (AttributeError, re.error):
+                e = True
             except Exception:
-                e = sys.exc_info()[1]
-                raise e
+                err = sys.exc_info()[1]
+                raise err
                 # This sucks, but it's either that or list all the exceptions that could
                 # possibly be raised here, so if anyone wants to do that, feel free to send me
                 # a patch. XXX: Make sure you raise here if you're debugging the completion
                 # stuff !
-                # e = True
+                e = True
             else:
                 matches = self.completer.matches
                 if (self.config.complete_magic_methods and self.buffer and
@@ -548,7 +692,7 @@ class Repl(object):
                     matches.extend(name for name in self.config.magic_methods
                                    if name.startswith(current_word))
 
-        if not e and self.argspec:
+        if not e and self.argspec and isinstance(self.argspec, ArgSpec):
             matches.extend(name + '=' for name in self.argspec[1][0]
                            if isinstance(name, basestring) and name.startswith(current_word))
             if PY3:
@@ -692,6 +836,13 @@ class Repl(object):
                     self.rl_history.append(s)
             else:
                 self.rl_history.append(s)
+
+        if len(self.buffer) == 1:
+            line = self.buffer[0]
+            if self.interp.is_commandline(line):
+                result = self.interp.runcommand(line)
+                self.buffer = []
+                return result
 
         more = self.interp.runsource('\n'.join(self.buffer))
 

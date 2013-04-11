@@ -114,6 +114,16 @@ class DispatchTable(object):
         else:
             raise(CannotFindHandler(ambiguous_keyname))
 
+    def smart_match(self, ambiguous_keyname, str_or_list):
+        if isinstance(str_or_list, list):
+            keyname = self._get_precise_keyname(ambiguous_keyname)
+            matches = map(self._get_precise_keyname, str_or_list)
+            return keyname in matches
+        else:
+            keyname = self._get_precise_keyname(ambiguous_keyname)
+            matches = self._get_precise_keyname(str_or_list)
+            return keyname == matches
+
     def _get_precise_keyname(self, ambiguous_keyname):
         if isinstance(ambiguous_keyname, text_type):
             ambiguous_keyname = ambiguous_keyname.encode(getpreferredencoding())

@@ -93,6 +93,7 @@ def _loadini(struct, configfile):
     struct.save_append_py = config.getboolean('general', 'save_append_py')
     struct.editor = config.get('general', 'editor')
     struct.word_delimiter = config.get('general', 'word_delimiter')
+    struct.is_space_only_skip_char = config.get('general', 'is_space_only_skip_char')
     color_scheme_name = config.get('general', 'color_scheme')
 
     if color_scheme_name == 'default':

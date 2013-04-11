@@ -49,6 +49,9 @@ class Dispatcher(object):
         self.owner.self_insert(key)
         return ''
 
+    def smart_match(self, key, str_or_list):
+        return dispatch_table.smart_match(key, str_or_list)
+
     # issue C-m C-a C-m C-i
     @dispatch_table.set_handler_on('C-v')
     def do_raw(self):
@@ -108,7 +111,7 @@ class Dispatcher(object):
 
     @dispatch_table.set_handler_on('M-y')
     def do_yank_pop(self):
-        if self.previous_key in [u(''), u('M-y')]:
+        if self.smart_match(self.previous_key, ['C-y', 'M-y']):
             self.owner.yank_pop(self.yank_index)
             self.yank_index -= 1
         return ''

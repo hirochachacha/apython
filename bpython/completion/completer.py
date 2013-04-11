@@ -55,15 +55,27 @@ WITHOUT_CALLABLE_POSTFIX = set(['basestring'])
 
 class Completer(rlcompleter.Completer):
     def __init__(self, locals_=None, config=None):
+        assert config.autocomplete_mode in ['simple', 'fuzzy', 'substring']
+
         rlcompleter.Completer.__init__(self, locals_)
         self.locals = locals_
-        if hasattr(config, 'autocomplete_mode'):
-            if config.autocomplete_mode in ['simple', 'fuzzy', 'substring']:
-                self.autocomplete_mode = config.autocomplete_mode
-            else:
-                raise
-        else:
-            self.autocomplete_mode = SUBSTRING
+        self.autocomplete_mode = config.autocomplete_mode
+        self.commands = []
+        self.with_command = False
+        self.with_keyword = True
+
+    def complete(self, text, state, with_command=False, with_keyword=True):
+        self.with_command = with_command
+        self.with_keyword = with_keyword
+        try:
+            return rlcompleter.Completer.complete(self, text, state)
+        finally:
+            self.with_command = False
+            self.with_keyword = True
+
+
+    def register_command(self, word):
+        self.commands.append(word)
 
     def global_matches(self, text):
         """Compute matches when text is a simple name.
@@ -73,9 +85,14 @@ class Completer(rlcompleter.Completer):
 
         words = set()
         n = len(text)
-        for word in keyword.kwlist:
-            if self._method_match(word, n, text):
-                words.add(word)
+        if self.with_command:
+            for word in self.commands:
+                if self._method_match(word, n, text):
+                    words.add(word)
+        if self.with_keyword:
+            for word in keyword.kwlist:
+                if self._method_match(word, n, text):
+                    words.add(word)
         for nspace in [builtins.__dict__, self.locals]:
             for word, val in nspace.items():
                 if self._method_match(word, len(text), text) and word != "__builtins__":

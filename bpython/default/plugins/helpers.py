@@ -9,8 +9,11 @@ import subprocess
 import curses
 import sys
 import errno
-from bpython.config import config
 from six import callable
+
+import bpython
+
+config = bpython.running.config
 
 
 EMACS_CLIENT = re.compile(r'^emacsclient')
@@ -46,7 +49,7 @@ class CommandError(Exception): pass
 
 
 def invoke_editor(file_name, line_number, reloading):
-    _editor_name = config.editor or editor_name()
+    _editor_name = editor_name()
     if _editor_name:
         if callable(_editor_name):
             argc = len(inspect.getargspec(config.editor).args)
@@ -133,9 +136,11 @@ def editor_name():
       # => textmate
 
     """
-    _editor_name = os.path.basename(config.editor).split()
-    if _editor_name:
-        _editor_name = _editor_name[0]
+    _editor_name = config.editor
+    if not _editor_name:
+        _editor_name = os.path.basename(config.editor).split()
+        if _editor_name:
+            _editor_name = _editor_name[0]
     return _editor_name or os.environ.get('VISUAL') or os.environ.get('EDITOR')
 
 
@@ -178,3 +183,9 @@ def invoke_command_with_input(command, inputs):
         else:
             break
     curses.doupdate()
+
+
+def is_dictproxy(obj):
+    if hasattr(obj, '__class__') and hasattr(obj.__class__, '__name__'):
+        return obj.__class__.__name__ == 'dictproxy'
+    return False

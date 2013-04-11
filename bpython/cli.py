@@ -51,12 +51,11 @@ import curses
 import math
 import re
 import time
+import keyword
+import struct
+import inspect
 
 import bpython
-
-import keyword
-
-import struct
 
 if platform.system() != 'Windows':
     import signal      #Windows does not have job control
@@ -65,8 +64,6 @@ if platform.system() != 'Windows':
 import unicodedata
 import errno
 
-import inspect
-import locale
 from types import ModuleType
 
 # These are used for syntax highlighting
@@ -465,6 +462,17 @@ class ListBox(object):
         if self.topline is None:
             self.scr.resize(3, self.max_w)
             self.scr.addstr('\n  ')
+            return r
+
+        elif isinstance(self.topline, repl.CommandSpec):
+            name = self.topline[0]
+
+            self.scr.resize(3, self.max_w)
+
+            self.scr.addstr('\n  ')
+            self.scr.addstr(name, app.get_colpair('name') | curses.A_BOLD)
+            self.scr.addstr(': ', app.get_colpair('name'))
+            self.scr.addstr('command', app.get_colpair('name'))
             return r
 
         elif isinstance(self.topline, repl.KeySpec):
@@ -882,10 +890,20 @@ class Editable(object):
             pass
         else:
             pos = len(self.s) - self.cpos - 1
-            while pos >= 0 and self.s[pos] in self.word_delimiter:
+            while pos >= 0 and self.s[pos] in ' ':
                 pos -= 1
                 self.backward_character()
-                # Then we delete a full word.
+            if self.config.is_space_only_skip_char:
+                if pos >= 0 and self.s[pos] in self.word_delimiter:
+                    pos -= 1
+                    self.backward_character()
+            else:
+                while pos >= 0 and self.s[pos] in self.word_delimiter:
+                    pos -= 1
+                    self.backward_character()
+            while pos >= 0 and self.s[pos] in ' ':
+                pos -= 1
+                self.backward_character()
             while pos >= 0 and self.s[pos] not in self.word_delimiter:
                 pos -= 1
                 self.backward_character()
@@ -896,10 +914,20 @@ class Editable(object):
         else:
             len_s = len(self.s)
             pos = len_s - self.cpos - 1
-            while len_s > pos and self.s[pos] in self.word_delimiter:
+            while len_s > pos and self.s[pos] in ' ':
                 pos += 1
                 self.forward_character()
-                # Then we delete a full word.
+            if self.config.is_space_only_skip_char:
+                if len_s > pos and self.s[pos] in self.word_delimiter:
+                    pos += 1
+                    self.forward_character()
+            else:
+                while len_s > pos and self.s[pos] in self.word_delimiter:
+                    pos += 1
+                    self.forward_character()
+            while len_s > pos and self.s[pos] in ' ':
+                pos += 1
+                self.forward_character()
             while len_s > pos and self.s[pos] not in self.word_delimiter:
                 pos += 1
                 self.forward_character()
@@ -940,7 +968,19 @@ class Editable(object):
             deleted = []
             len_s = len(self.s)
             pos = len_s - self.cpos
-            while self.cpos > 0 and self.s[pos] in self.word_delimiter:
+            while self.cpos > 0 and self.s[pos] in ' ':
+                deleted.append(self.s[pos])
+                self.delete_character()
+                # Then we delete a full word.
+            if self.config.is_space_only_skip_char:
+                if self.cpos > 0 and self.s[pos] in self.word_delimiter:
+                    deleted.append(self.s[pos])
+                    self.delete_character()
+            else:
+                while self.cpos > 0 and self.s[pos] in self.word_delimiter:
+                    deleted.append(self.s[pos])
+                    self.delete_character()
+            while self.cpos > 0 and self.s[pos] in ' ':
                 deleted.append(self.s[pos])
                 self.delete_character()
                 # Then we delete a full word.
@@ -956,7 +996,19 @@ class Editable(object):
             pos = len(self.s) - self.cpos - 1
             deleted = []
             # First we delete any space to the left of the cursor.
-            while pos >= 0 and self.s[pos] in self.word_delimiter:
+            while pos >= 0 and self.s[pos] in ' ':
+                deleted.append(self.s[pos])
+                pos -= self.backward_delete_character()
+                # Then we delete a full word.
+            if self.config.is_space_only_skip_char:
+                if pos >= 0 and self.s[pos] in self.word_delimiter:
+                    deleted.append(self.s[pos])
+                    pos -= self.backward_delete_character()
+            else:
+                while pos >= 0 and self.s[pos] in self.word_delimiter:
+                    deleted.append(self.s[pos])
+                    pos -= self.backward_delete_character()
+            while pos >= 0 and self.s[pos] in ' ':
                 deleted.append(self.s[pos])
                 pos -= self.backward_delete_character()
                 # Then we delete a full word.
@@ -1010,15 +1062,17 @@ class Editable(object):
 
     def yank(self):
         """Paste the text from the cut buffer at the current cursor location"""
-        self.addstr(self.cut_buffer[-1])
-        self.print_line(self.s, clr=True)
+        if len(self.cut_buffer) > 0:
+            self.addstr(self.cut_buffer[-1])
+            self.print_line(self.s, clr=True)
 
     def yank_pop(self, yank_index):
         """Paste the text from the cut buffer at the current cursor location"""
-        for _ in xrange(len(self.cut_buffer[(yank_index + 1) % len(self.cut_buffer)])):
-            self.backward_delete_character()
-        self.addstr(self.cut_buffer[yank_index % len(self.cut_buffer)])
-        self.print_line(self.s, clr=True)
+        if len(self.cut_buffer) > 0:
+            for _ in xrange(len(self.cut_buffer[(yank_index + 1) % len(self.cut_buffer)])):
+                self.backward_delete_character()
+            self.addstr(self.cut_buffer[yank_index % len(self.cut_buffer)])
+            self.print_line(self.s, clr=True)
 
     def accept_line(self):
         """Process a linefeed character; it only needs to check the
@@ -1070,17 +1124,15 @@ class CLIRepl(repl.Repl, Editable):
 
         # look from right to left for a bad method character
         l = len(self.s)
-        is_method_char = lambda c: c.isalnum() or c in ('.', '_')
 
-        if not self.s or not is_method_char(self.s[l - 1]):
+        if not self.s or not repl.WORD.match(self.s[-1]):
             return
 
         for i in xrange(1, l + 1):
-            if not is_method_char(self.s[-i]):
-                i -= 1
+            if not repl.WORD.match(self.s[-i]):
                 break
 
-        return self.s[-i:]
+        return self.s[-i:].strip()
 
     def addstr(self, s):
         """Add a string to the current input line and figure out
@@ -1507,6 +1559,7 @@ class CLIRepl(repl.Repl, Editable):
                 return True
 
             current_word = self.current_string or self.current_word
+
             if not current_word:
                 return True
         else:
@@ -1557,9 +1610,12 @@ class CLIRepl(repl.Repl, Editable):
                         self.list_box.nosep = True
                         self.show_list_box()
                     else:
-                        if not self.get_args(current_match):
+                        if not self.set_argspec(current_match):
                             if keyword.iskeyword(current_match):
                                 self.argspec = repl.KeySpec([current_match])
+                            elif self.interp.is_commandline(current_match):
+                                command_spec = self.interp.get_command_spec(current_match)
+                                self.argspec = repl.CommandSpec(command_spec)
                             else:
                                 try:
                                     obj = app.clirepl.get_object(current_match)
@@ -1873,6 +1929,21 @@ class App(object):
         if platform.system() != 'Windows':
             signal.signal(signal.SIGWINCH, self.old_sigwinch_handler)
             signal.signal(signal.SIGCONT, self.old_sigcont_handler)
+
+    def register_command(self, name, function=None, without_completion=False):
+        return self.clirepl.register_command(name, function, without_completion)
+
+    def set_handler_on(self, ambiguous_keyname, function=None):
+        from bpython.key.dispatch_table import dispatch_table
+        return dispatch_table.set_handler_on(ambiguous_keyname, function)
+
+    def set_handler_on_clirepl(self, ambiguous_keyname, function=None):
+        from bpython.key.dispatch_table import dispatch_table
+        return dispatch_table.set_handler_on_clirepl(ambiguous_keyname, function)
+
+    def set_handler_on_statusbar(self, ambiguous_keyname, function=None):
+        from bpython.key.dispatch_table import dispatch_table
+        return dispatch_table.set_handler_on_statusbar(ambiguous_keyname, function)
 
     def newwin(self, *args):
         """Wrapper for curses.newwin to automatically set background colour on any
