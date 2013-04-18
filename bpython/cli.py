@@ -109,6 +109,9 @@ class FakeStream(object):
         self.encoding = getpreferredencoding()
         self.interface = interface
 
+    def flush(self):
+        pass
+
     def write(self, s):
         self.interface.write(s)
 
@@ -304,6 +307,9 @@ class ListBox(object):
             self.height_offset = self._show_topline() + 1
             self._prepare_v_items()
             self._show_v_items()
+        else:
+            app.clirepl.list_win_visible = False
+            app.clirepl.redraw()
 
     def sync(self, matches_iter):
         self.index = matches_iter.index
@@ -521,7 +527,7 @@ class ListBox(object):
             elif not PY3 and isinstance(obj, unicode):
                 val = '"' + unicode(obj) + '"'
             elif obj is None:
-                val = 'None'
+                return r
 
             self.scr.addstr(obj_name, app.get_colpair('name') | curses.A_BOLD)
             if val:
@@ -1002,7 +1008,7 @@ class Editable(object):
     def backward_delete_character(self, delete_tabs=True):
         """Process a backspace"""
         y, x = self.scr.getyx()
-        if self.is_empty_line:
+        if self.is_empty_line or self.is_beginning_of_the_line:
             return
         if x == self.ix and y == self.iy:
             return
@@ -1300,7 +1306,6 @@ class CLIRepl(repl.Repl, Editable):
 
     def reverse_search_history(self):
         """Search with the partial matches from the history object."""
-        self.cpos = 0
         self.clear_wrapped_lines()
         self.rl_history.enter(self.s)
         index = self.rl_history.index
@@ -1323,6 +1328,7 @@ class CLIRepl(repl.Repl, Editable):
                 self.list_box.refresh()
                 self.list_win_visible = False
         else:
+            self.list_win_visible = False
             self.redraw()
 
         self.interact.notify("mode: %s" % "reverse-search")
@@ -1330,7 +1336,6 @@ class CLIRepl(repl.Repl, Editable):
 
     def search_history(self):
         """Search with the partial matches from the history object."""
-        self.cpos = 0
         self.clear_wrapped_lines()
         self.rl_history.enter(self.s)
         index = self.rl_history.index
@@ -1353,6 +1358,7 @@ class CLIRepl(repl.Repl, Editable):
                 self.list_box.refresh()
                 self.list_win_visible = False
         else:
+            self.list_win_visible = False
             self.redraw()
 
         self.interact.notify("mode: %s" % "search")
@@ -1663,6 +1669,8 @@ class CLIRepl(repl.Repl, Editable):
                     if self.in_search_mode:
                         self.list_box.nosep = True
                         self.show_list_box()
+                    elif self.current_string:
+                        self.reset_and_show_list_box(nosep=True)
                     else:
                         self.set_argspec()
                         self.reset_and_show_list_box()

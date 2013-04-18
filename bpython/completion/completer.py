@@ -64,8 +64,6 @@ class BPythonCompleter(rlcompleter.Completer):
         self.autocomplete_mode = config.autocomplete_mode
         self.commands = []
         self.with_command = False
-        self.custom_method_matches = None
-        self.custom_global_matches = None
 
     def file_complete(self, text):
         self.matches = file_completer.complete(text)
@@ -73,17 +71,12 @@ class BPythonCompleter(rlcompleter.Completer):
     def import_complete(self, text, line):
         self.matches = import_completer.complete(text, line)
 
-    def complete(self, text, with_command=False,
-                 custom_method_matches=None, custom_global_matches=None):
+    def complete(self, text, with_command=False):
         self.with_command = with_command
-        self.custom_method_matches = custom_method_matches
-        self.custom_global_matches = custom_global_matches
         try:
             return rlcompleter.Completer.complete(self, text, 0)
         finally:
             self.with_command = False
-            self.custom_method_matches = None
-            self.custom_global_matches = None
 
 
     def register_command(self, word):
@@ -97,10 +90,6 @@ class BPythonCompleter(rlcompleter.Completer):
 
         words = set()
         n = len(text)
-        if self.custom_global_matches:
-            for word in self.custom_global_matches:
-                if self._method_match(word, n, text):
-                    words.add(word)
         if self.with_command:
             for word in self.commands:
                 if self._method_match(word, n, text):
@@ -121,7 +110,7 @@ class BPythonCompleter(rlcompleter.Completer):
         # Gna, Py 2.6's rlcompleter searches for __call__ inside the
         # instance instead of the type, so we monkeypatch to prevent
         # side-effects (__getattr__/__getattribute__)
-        m = re.match(r"(\w+(\.\w+)*)\.(\w*\(?)", text)
+        m = re.match(r"(\w+(\.\w+)*)\.(\w*)", text)
         if not m:
             return []
 
@@ -138,10 +127,6 @@ class BPythonCompleter(rlcompleter.Completer):
         else:
             with inspection.AttrCleaner(obj):
                 matches = self._attr_lookup(obj, expr, attr)
-            if self.custom_method_matches:
-                for match in self.custom_method_matches:
-                    if self._method_match(match, len(attr), attr):
-                        matches.add(match)
             return matches
 
     def _attr_lookup(self, obj, expr, attr):
@@ -169,7 +154,6 @@ class BPythonCompleter(rlcompleter.Completer):
         for word in self._private_filter(attr, words):
             if self._method_match(word, n, attr) and word != "__builtins__":
                 matches.append("%s.%s" % (expr, word))
-                # raise Exception(str(matches))
         return sorted(matches)
 
     def _callable_postfix(self, value, word):
@@ -190,10 +174,7 @@ class BPythonCompleter(rlcompleter.Completer):
             return (match for match in matches if not match.startswith('_'))
 
     def _method_match(self, word, size, text):
-        #remove ambiguity
-        if text.endswith("("):
-            return word == text
-        elif self.autocomplete_mode == SIMPLE:
+        if self.autocomplete_mode == SIMPLE:
             return word[:size] == text
         elif self.autocomplete_mode == SUBSTRING:
             s = r'.*%s.*' % text

@@ -35,6 +35,7 @@ from pygments.token import Token
 from bpython.completion import inspection
 from bpython.completion.completers import import_completer
 from bpython.util import getpreferredencoding
+from bpython.parser import WORD
 from bpython._py3compat import PythonLexer, PY3
 from six import callable
 
@@ -43,7 +44,7 @@ class NothingType: pass
 
 Nothing = NothingType()
 
-
+#TODO more precise one
 def command_tokenize(line):
     result = ['']
     in_quote = False
@@ -257,19 +258,25 @@ class BPythonInterpreter(code.InteractiveInterpreter):
         if not spec:
             if keyword.iskeyword(line):
                 spec = inspection.KeySpec([line])
-            elif self.is_commandline(line):
+            elif self.is_commandline(line) and len(WORD.findall(line)) == 1:
                 spec = self.get_command_spec(line)
                 spec = inspection.CommandSpec(spec)
             elif line.startswith('from ') or line.startswith('import '):
                 obj = import_completer.get_object(cw, line)
-                try:
+                if obj:
                     spec = inspection.ImpSpec([cw, obj])
-                except:
+                else:
                     spec = None
             else:
                 obj = self.get_object(line)
                 if obj is not Nothing:
                     spec = inspection.ObjSpec([line, obj])
+                elif cw:
+                    obj = self.get_object(cw)
+                    if obj is not Nothing:
+                        spec = inspection.ObjSpec([cw, obj])
+                    else:
+                        spec = None
                 else:
                     spec = None
         if spec is not None:
@@ -299,11 +306,6 @@ class BPythonInterpreter(code.InteractiveInterpreter):
                         spec.docstring = pydoc.getdoc(f)
                     except IndexError:
                         spec.docstring = None
-                    else:
-                        # pydoc.getdoc() returns an empty string if no
-                        # docstring was found
-                        if not spec.docstring:
-                            spec.docstring = None
         return spec
 
     def _get_argspec(self, func, arg_number):

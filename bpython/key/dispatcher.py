@@ -212,7 +212,11 @@ class Dispatcher(object):
     @dispatch_table.set_handler_on_clirepl('C-x')
     def debug(self):
         from bpython.cli import debug
-        debug(str(self.owner.matches_iter.current()))
+        debug(str(self.owner.current_word)
+                + ':'
+                + str(self.owner.current_line)
+                + ':'
+                + str(self.owner.matches))
         return ''
 
     @dispatch_table.set_handler_on_clirepl('M-. M-_')

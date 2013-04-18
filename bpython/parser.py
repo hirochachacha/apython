@@ -36,7 +36,7 @@ from bpython._py3compat import PythonLexer
 from six.moves import xrange
 
 
-WORD = re.compile(r'\S+')
+WORD = re.compile(r'([\w\\.])+')
 
 
 class ReplParser(object):
@@ -172,14 +172,15 @@ class ReplParser(object):
         for i in xrange(1, l + 1):
             try:
                 if not WORD.match(line[-i-self.cpos]):
+                    i -= 1
                     break
             except IndexError:
                 break
 
         if self.cpos:
-            return line[-i-self.cpos:-self.cpos].strip()
+            return line[-i-self.cpos:-self.cpos]
         else:
-            return line[-i:].strip()
+            return line[-i:]
 
     def get_current_string(self):
         tokens = self.tokenize(self.s)
