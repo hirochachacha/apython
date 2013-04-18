@@ -25,247 +25,27 @@
 #
 
 from __future__ import with_statement
-import code
-import inspect
 import os
-import pydoc
 import sys
 import re
 import textwrap
-import traceback
-from glob import glob
 from itertools import takewhile
-import locale
 
 from pygments.token import Token
 
-from bpython.completion import importcompletion, inspection
-from bpython.completion.completer import Completer
+from bpython.completion import inspection
+from bpython.completion.completer import BPythonCompleter
+from bpython.parser import ReplParser
 from bpython.history import History
 
+from bpython.util import getpreferredencoding
 from bpython._py3compat import PythonLexer, PY3
-from six import callable
+
+from bpython.parser import WORD
 
 
 if PY3:
     basestring = str
-
-
-WORD = re.compile(r'\S+')
-
-
-def command_tokenize(line):
-    result = ['']
-    in_quote = False
-    quote_type = None
-    for c in line:
-        if c == ' ':
-            if not in_quote:
-                if result[-1] == '':
-                    pass
-                else:
-                    result.append('')
-            else:
-                result[-1] += c
-        elif c in ['"', "'"]:
-            if not in_quote:
-                in_quote = True
-                quote_type = c
-                result[-1] += c
-            else:
-                if c == quote_type:
-                    in_quote = False
-                    quote_type = None
-                    result[-1] += c
-                else:
-                    result[-1] += c
-        elif c == "(":
-            if not in_quote:
-                in_quote = True
-                quote_type = c
-                result[-1] += c
-            else:
-                result[-1] += c
-        elif c == ")":
-            if not in_quote:
-                in_quote = True
-                quote_type = c
-                result[-1] += c
-            else:
-                if quote_type == "(":
-                    in_quote = False
-                    quote_type = None
-                    result[-1] += c
-                else:
-                    result[-1] += c
-        else:
-            result[-1] += c
-    return result
-
-
-def getpreferredencoding():
-    return locale.getpreferredencoding() or sys.getdefaultencoding()
-
-
-class ObjSpec(list): pass
-
-
-class KeySpec(list): pass
-
-
-class CommandSpec(list): pass
-
-
-class ArgSpec(list): pass
-
-
-class Interpreter(code.InteractiveInterpreter):
-    def __init__(self, locals=None, encoding=None):
-        """The syntaxerror callback can be set at any time and will be called
-        on a caught syntax error. The purpose for this in bpython is so that
-        the repl can be instantiated after the interpreter (which it
-        necessarily must be with the current factoring) and then an exception
-        callback can be added to the Interpeter instance afterwards - more
-        specifically, this is so that autoindentation does not occur after a
-        traceback."""
-
-        self.command_table = {}
-        self.encoding = encoding or sys.getdefaultencoding()
-        self.syntaxerror_callback = None
-        # Unfortunately code.InteractiveInterpreter is a classic class, so no super()
-        code.InteractiveInterpreter.__init__(self, locals)
-
-        self.locals['__command_table'] = self.command_table
-
-    if not PY3:
-
-        def runsource(self, source, filename='<input>', symbol='single',
-                      encode=True):
-            if encode:
-                source = '# coding: %s\n%s' % (self.encoding,
-                                               source.encode(self.encoding))
-            return code.InteractiveInterpreter.runsource(self, source,
-                                                         filename, symbol)
-
-    def showsyntaxerror(self, filename=None):
-        """Override the regular handler, the code's copied and pasted from
-        code.py, as per showtraceback, but with the syntaxerror callback called
-        and the text in a pretty colour."""
-        if self.syntaxerror_callback is not None:
-            self.syntaxerror_callback()
-
-        type, value, sys.last_traceback = sys.exc_info()
-        sys.last_type = type
-        sys.last_value = value
-        if filename and type is SyntaxError:
-            # Work hard to stuff the correct filename in the exception
-            try:
-                msg, (dummy_filename, lineno, offset, line) = value.args
-            except:
-                # Not the format we expect; leave it alone
-                pass
-            else:
-                # Stuff in the right filename and right lineno
-                if not PY3:
-                    lineno -= 1
-                value = SyntaxError(msg, (filename, lineno, offset, line))
-                sys.last_value = value
-        list = traceback.format_exception_only(type, value)
-        self.writetb(list)
-
-    def showtraceback(self):
-        """This needs to override the default traceback thing
-        so it can put it into a pretty colour and maybe other
-        stuff, I don't know"""
-        try:
-            t, v, tb = sys.exc_info()
-            sys.last_type = t
-            sys.last_value = v
-            sys.last_traceback = tb
-            tblist = traceback.extract_tb(tb)
-            del tblist[:1]
-            # Set the right lineno (encoding header adds an extra line)
-            if not PY3:
-                for i, (filename, lineno, module, something) in enumerate(tblist):
-                    if filename == '<input>':
-                        tblist[i] = (filename, lineno - 1, module, something)
-
-            l = traceback.format_list(tblist)
-            if l:
-                l.insert(0, "Traceback (most recent call last):\n")
-            l[len(l):] = traceback.format_exception_only(t, v)
-        finally:
-            tblist = tb = None
-
-        self.writetb(l)
-
-    def writetb(self, lines):
-        """This outputs the traceback and should be overridden for anything
-        fancy."""
-        for line in lines:
-            self.write(line)
-
-    def register_command(self, name, function):
-        if name not in self.command_table:
-            self.command_table[name] = function
-            return True
-        else:
-            return False
-
-    def is_commandline(self, line):
-        try:
-            if not PY3 and isinstance(line, unicode):
-                encoding = getpreferredencoding()
-                words = map(lambda s: s.decode(encoding), command_tokenize(line.encode(encoding)))
-            else:
-                words = command_tokenize(line)
-        except ValueError:
-            return False
-        else:
-            if len(words) > 0:
-                command_name = words[0]
-                return command_name in self.command_table
-            else:
-                return False
-
-    def get_command_spec(self, line):
-        try:
-            if not PY3 and isinstance(line, unicode):
-                encoding = getpreferredencoding()
-                words = map(lambda s: s.decode(encoding), command_tokenize(line.encode(encoding)))
-            else:
-                words = command_tokenize(line)
-        except ValueError:
-            pass
-        else:
-            if len(words) > 0:
-                command_name = words[0]
-                if command_name in self.command_table:
-                    return [command_name, self.command_table[command_name]]
-
-    def runcommand(self, line):
-        try:
-            if not PY3 and isinstance(line, unicode):
-                encoding = getpreferredencoding()
-                words = map(lambda s: s.decode(encoding), command_tokenize(line.encode(encoding)))
-            else:
-                words = command_tokenize(line)
-        except ValueError:
-            pass
-        else:
-            if len(words) > 0:
-                command_name = words[0]
-                if command_name in self.command_table:
-                    source = "__command_table['%s'](%s)" % (command_name, ','.join(words[1:]))
-                    self.runsource(source)
-
-    def get_object(self, name):
-        attributes = name.split('.')
-        obj = eval(attributes.pop(0), self.locals)
-        while attributes:
-            with inspection.AttrCleaner(obj):
-                obj = getattr(obj, attributes.pop(0))
-        return obj
 
 
 class MatchesIterator(object):
@@ -385,16 +165,18 @@ class Repl(object):
         self.interp = interp
         self.interp.syntaxerror_callback = self.clear_current_line
         self.match = False
+        self.s = ""
+        self.cpos = 0
         self.s_hist = []
         self.rl_history = History(allow_duplicates=self.config.hist_duplicates)
         self.stdin_history = History()
         self.stdout_history = History()
         self.evaluating = False
-        self.completer = Completer(self.interp.locals, config)
+        self.completer = BPythonCompleter(self.interp.locals, config)
+        self.parser = ReplParser(self)
         self.matches = []
         self.matches_iter = MatchesIterator()
         self.argspec = None
-        self.current_callable = None
         self.list_win_visible = False
         self._C = {}
         self.interact = Interaction(self.config)
@@ -416,14 +198,14 @@ class Repl(object):
             if not name:
                 name = function.__name__.replace('_', '-')
             if self.interp.register_command(name, function) and not without_completion:
+                name += " "
                 self.completer.register_command(name)
+
         if not function:
             return inner
         else:
             return inner(function, name)
 
-
-    #alias
     @property
     def history(self):
         return self.stdin_history
@@ -437,10 +219,6 @@ class Repl(object):
         It prevents autoindentation from occuring after a traceback."""
         raise (NotImplementedError("clear_current_line should be implemented in subclass"))
 
-    @property
-    def current_word(self):
-        raise (NotImplementedError("current_word should be implemented in subclass"))
-
     def reevaluate(self):
         raise (NotImplementedError("reevaluate should be implemented in subclass"))
 
@@ -448,44 +226,15 @@ class Repl(object):
         raise (NotImplementedError("tab should be implemented in subclass"))
 
     def tokenize(self, s, newline=False):
-        raise (NotImplementedError("tokenize should be implemented in subclass"))
+        """Tokenize a line of code."""
+        return self.parser.tokenize(s, newline)
 
     def startup(self):
         """
         Execute PYTHONSTARTUP file if it exits. Call this after front
         end-specific initialisation.
         """
-        startup = os.environ.get('PYTHONSTARTUP')
-        default_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "default"))
-        default_rc = os.path.join(default_dir, "rc.py")
-        config_dir = os.path.expanduser('~/.bpython')
-        rc = os.path.join(config_dir, 'rc.py')
-
-        if PY3:
-            self.interp.runsource("import sys; sys.path.append('%s')" % default_dir, default_dir, 'exec')
-        else:
-            self.interp.runsource("import sys; sys.path.append('%s')" % default_dir, default_dir, 'exec', encode=False)
-
-        for filename in [startup, default_rc]:
-            if filename and os.path.isfile(filename):
-                with open(filename, 'r') as f:
-                    if PY3:
-                        self.interp.runsource(f.read(), filename, 'exec')
-                    else:
-                        self.interp.runsource(f.read(), filename, 'exec', encode=False)
-
-        if PY3:
-            self.interp.runsource("sys.path.pop(); sys.path.append('%s'); del sys" % config_dir, config_dir, 'exec')
-        else:
-            self.interp.runsource("sys.path.pop(); sys.path.append('%s'); del sys" % config_dir, config_dir, 'exec', encode=False)
-
-        for filename in [rc]:
-            if filename and os.path.isfile(filename):
-                with open(filename, 'r') as f:
-                    if PY3:
-                        self.interp.runsource(f.read(), filename, 'exec')
-                    else:
-                        self.interp.runsource(f.read(), filename, 'exec', encode=False)
+        self.interp.startup()
 
     @property
     def stdout(self):
@@ -494,108 +243,31 @@ class Repl(object):
     @property
     def current_string(self):
         """If the line ends in a string get it, otherwise return ''"""
-        tokens = self.tokenize(self.current_line)
-        string_tokens = list(takewhile(token_is_any_of([Token.String,
-                                                        Token.Text]),
-                                       reversed(tokens)))
-        if not string_tokens:
-            return ''
-        opening = string_tokens.pop()[1]
-        string = list()
-        for (token, value) in reversed(string_tokens):
-            if token is Token.Text:
-                continue
-            elif opening is None:
-                opening = value
-            elif token is Token.String.Doc:
-                string.append(value[3:-3])
-                opening = None
-            elif value == opening:
-                opening = None
-                string = list()
-            else:
-                string.append(value)
+        return self.parser.get_current_string()
 
-        if opening is None:
-            return ''
-        return ''.join(string)
+    @property
+    def current_word(self):
+        """Return the current word, i.e. the (incomplete) word directly to the
+        left of the cursor"""
+        # if self.cpos:
+            # return
+        # else:
+        return self.parser.get_current_word()
+
 
     def get_object(self, name):
         return self.interp.get_object(name)
 
-    def set_argspec(self, line):
+    def set_argspec(self):
         """Check if an unclosed parenthesis exists, then attempt to get the
         argspec() for it. On success, update self.argspec and return True,
         otherwise set self.argspec to None and return False"""
 
-        self.current_callable = None
-
         if not self.config.arg_spec:
-            return False
-
-        # Get the name of the current function and where we are in
-        # the arguments
-        stack = [['', 0, '']]
-        try:
-            for (token, value) in PythonLexer().get_tokens(line):
-                if token is Token.Punctuation:
-                    if value in '([{':
-                        stack.append(['', 0, value])
-                    elif value in ')]}':
-                        stack.pop()
-                    elif value == ',':
-                        try:
-                            stack[-1][1] += 1
-                        except TypeError:
-                            stack[-1][1] = ''
-                        stack[-1][0] = ''
-                    elif value == ':' and stack[-1][2] == 'lambda':
-                        stack.pop()
-                    else:
-                        stack[-1][0] = ''
-                elif (token is Token.Name or token in Token.Name.subtypes or
-                                  token is Token.Operator and value == '.'):
-                    stack[-1][0] += value
-                elif token is Token.Operator and value == '=':
-                    stack[-1][1] = stack[-1][0]
-                    stack[-1][0] = ''
-                elif token is Token.Keyword and value == 'lambda':
-                    stack.append(['', 0, value])
-                else:
-                    stack[-1][0] = ''
-            while stack[-1][2] in '[{':
-                stack.pop()
-            _, arg_number, _ = stack.pop()
-            func, _, _ = stack.pop()
-        except IndexError:
-            return False
-        if not func:
-            return False
-
-        try:
-            f = self.get_object(func)
-        except (AttributeError, NameError, SyntaxError):
-            return False
-
-        if callable(f):
-            if inspect.isclass(f):
-                try:
-                    if f.__init__ is not object.__init__:
-                        f = f.__init__
-                except AttributeError:
-                    return None
-            self.current_callable = f
-
-            self.argspec = inspection.getargspec(func, f)
-            if self.argspec:
-                self.argspec.append(arg_number)
-                self.argspec = ArgSpec(self.argspec)
-                return True
-            return False
+            self.argspec = None
         else:
-            objspec = [func, f]
-            self.argspec = ObjSpec(objspec)
-            return True
+            func, arg_number = self.parser.get_current_func()
+            self.argspec = self.interp.get_argspec(self.s, func, arg_number, self.current_word)
 
     @property
     def current_object(self):
@@ -603,12 +275,9 @@ class Repl(object):
         current name in the current input line. Return `None` if the
         source cannot be found."""
         obj = None
-        try:
-            line = self.current_line
-            if inspection.is_eval_safe_name(line):
-                obj = self.get_object(line)
-        except (AttributeError, IOError, NameError, TypeError):
-            obj = None
+        line = self.current_line
+        if inspection.is_eval_safe_name(line):
+            obj = self.get_object(line)
 
         return obj
 
@@ -617,92 +286,73 @@ class Repl(object):
         display them in a window. Also check if there's an available argspec
         (via the inspect module) and bang that on top of the completions too.
         The return value is whether the list_win is visible or not."""
-        self.docstring = None
-        if not self.set_argspec(self.current_line):
-            self.argspec = None
-        if self.current_callable is not None:
-            try:
-                self.docstring = pydoc.getdoc(self.current_callable)
-            except IndexError:
-                self.docstring = None
-            else:
-                # pydoc.getdoc() returns an empty string if no
-                # docstring was found
-                if not self.docstring:
-                    self.docstring = None
+        self.set_argspec()
 
         current_word = self.current_word
         current_string = self.current_string
 
+        line = self.current_line.lstrip()
         if not current_word:
             self.matches = []
             self.matches_iter.update()
-        if not (current_word or current_string):
-            return bool(self.argspec or self.docstring)
-
-        if current_string and tab:
+            return bool(self.argspec)
+        elif not (current_word or current_string):
+            return bool(self.argspec)
+        elif current_string and tab:
             # Filename completion
-            self.matches = []
-            username = current_string.split(os.path.sep, 1)[0]
-            user_dir = os.path.expanduser(username)
-            for filename in glob(os.path.expanduser(current_string + '*')):
-                if os.path.isdir(filename):
-                    filename += os.path.sep
-                if current_string.startswith('~'):
-                    filename = username + filename[len(user_dir):]
-                self.matches.append(filename)
+            self.completer.file_complete(current_string)
+            self.matches = self.completer.matches
             self.matches_iter.update(current_string, self.matches)
             return bool(self.matches)
         elif current_string:
             # Do not provide suggestions inside strings, as one cannot tab
             # them so they would be really confusing.
-            self.matches_iter.update()
-            return False
-
-        # Check for import completion
-        e = False
-        matches = importcompletion.complete(self.current_line, current_word)
-        if matches is not None and not matches:
             self.matches = []
             self.matches_iter.update()
             return False
+        elif (self.config.complete_magic_methods
+                and self.buffer
+                and self.buffer[0].startswith("class ")
+                and line.startswith('def ')):
+            self.matches = [name for name in self.config.magic_methods
+                            if name.startswith(current_word)]
+            self.matches_iter.update(current_word, self.matches)
+            return bool(self.matches)
+        elif line.startswith('class ') or line.startswith('def '):
+            self.matches = []
+            self.matches_iter.update()
+            return False
+        elif line.startswith('from ') or line.startswith('import '):
+            self.completer.import_complete(current_word, self.current_line)
+            self.matches = self.completer.matches
+            self.matches_iter.update(current_word, self.matches)
+            return bool(self.matches)
 
-        if matches is None:
-            # Nope, no import, continue with normal completion
-            try:
-                if len(self.buffer) == 0 and len(WORD.findall(self.current_line)) == 1:
-                    self.completer.complete(current_word, 0, with_command=True)
-                else:
-                    self.completer.complete(current_word, 0)
-            except (AttributeError, re.error):
-                e = True
-            except Exception:
-                err = sys.exc_info()[1]
-                raise err
-                # This sucks, but it's either that or list all the exceptions that could
-                # possibly be raised here, so if anyone wants to do that, feel free to send me
-                # a patch. XXX: Make sure you raise here if you're debugging the completion
-                # stuff !
-                e = True
+        e = False
+        try:
+            if len(self.buffer) == 0 and len(WORD.findall(self.current_line)) == 1:
+                self.completer.complete(current_word, with_command=True)
             else:
-                matches = self.completer.matches
-                if (self.config.complete_magic_methods and self.buffer and
-                        self.buffer[0].startswith("class ") and
-                        self.current_line.lstrip().startswith("def ")):
-                    matches.extend(name for name in self.config.magic_methods
-                                   if name.startswith(current_word))
+                self.completer.complete(current_word)
+        except (AttributeError, re.error):
+            e = True
+        except Exception:
+            err = sys.exc_info()[1]
+            raise err
+            # This sucks, but it's either that or list all the exceptions that could
+            # possibly be raised here, so if anyone wants to do that, feel free to send me
+            # a patch. XXX: Make sure you raise here if you're debugging the completion
+            # stuff !
+            e = True
+        else:
+            matches = self.completer.matches
 
-        if not e and self.argspec and isinstance(self.argspec, ArgSpec):
+        if not e and self.argspec and isinstance(self.argspec, inspection.ArgSpec):
             matches.extend(name + '=' for name in self.argspec[1][0]
                            if isinstance(name, basestring) and name.startswith(current_word))
             if PY3:
                 matches.extend(name + '=' for name in self.argspec[1][4]
                                if name.startswith(current_word))
-
-        # unless the first character is a _ filter out all attributes starting with a _
-        if not e and not current_word.split('.')[-1].startswith('_'):
-            matches = [match for match in matches
-                       if not match.split('.')[-1].startswith('_')]
 
         if e or not matches:
             self.matches = []
@@ -736,7 +386,7 @@ class Repl(object):
                 if i >= height:
                     return out
                 i += 1
-            # Drop the last newline
+                # Drop the last newline
         out[-1] = out[-1].rstrip()
         return out
 
@@ -898,45 +548,6 @@ def next_indentation(line, tab_length):
         if line.lstrip().startswith(('return', 'pass', 'raise', 'yield')):
             indentation -= 1
     return indentation
-
-
-def next_token_inside_string(s, inside_string):
-    """Given a code string s and an initial state inside_string, return
-    whether the next token will be inside a string or not."""
-    for token, value in PythonLexer().get_tokens(s):
-        if token is Token.String:
-            value = value.lstrip('bBrRuU')
-            if value in ['"""', "'''", '"', "'"]:
-                if not inside_string:
-                    inside_string = value
-                elif value == inside_string:
-                    inside_string = False
-    return inside_string
-
-
-def token_is(token_type):
-    """Return a callable object that returns whether a token is of the
-    given type `token_type`."""
-
-    def token_is_type(token):
-        """Return whether a token is of a certain type or not."""
-        token = token[0]
-        while token is not token_type and token.parent:
-            token = token.parent
-        return token is token_type
-
-    return token_is_type
-
-
-def token_is_any_of(token_types):
-    """Return a callable object that returns whether a token is any of the
-    given types `token_types`."""
-    is_token_types = map(token_is, token_types)
-
-    def token_is_any_of(token):
-        return any(check(token) for check in is_token_types)
-
-    return token_is_any_of
 
 
 def extract_exit_value(args):

@@ -15,7 +15,7 @@ paste_time = 0.02
 syntax = True
 tab_length = 4
 save_append_py = False
-word_delimiter =  !"#$%%&'()*+,-./:;<=>?@[\]^`{|}~
+word_delimiter =  !"#$%%&'()*+,-./:;<=>?@[\]^`{|} ~
 is_space_only_skip_char = True
 editor =
 

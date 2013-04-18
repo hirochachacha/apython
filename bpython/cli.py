@@ -51,7 +51,6 @@ import curses
 import math
 import re
 import time
-import keyword
 import struct
 import inspect
 
@@ -68,12 +67,12 @@ from types import ModuleType
 
 # These are used for syntax highlighting
 from pygments import format
-from pygments.token import Token
 from bpython.formatter import BPythonFormatter
 
 # This for completion
-from bpython.completion import importcompletion
+from bpython.completion.completers import import_completer
 from bpython.completion import completer
+from bpython.completion import inspection
 
 # This for config
 from bpython.config.struct import Struct
@@ -83,9 +82,10 @@ from bpython import translations
 from bpython.translations import _
 
 from bpython import repl
-from bpython.repl import getpreferredencoding
-from bpython.formatter import Parenthesis
+from bpython.util import getpreferredencoding
 import bpython.config.args
+
+from bpython.interpreter import BPythonInterpreter
 
 from bpython._py3compat import PythonLexer, PY3, chr
 from six.moves import map, xrange
@@ -98,7 +98,7 @@ clipboard = []
 
 
 def debug(s):
-    app.clirepl.interact.notify(s)
+    app.clirepl.interact.notify(str(s))
 
 
 class FakeStream(object):
@@ -272,35 +272,9 @@ class ListBox(object):
         self.down = 0
         self.height_offset = 0
 
-    def show(self):
-        if self.items:
-            self._prepare_v_items()
-            self._show_v_items()
-        elif self.docstring is not None:
-            self._prepare_doc()
-            self._show_doc()
-
-    def sync(self, matches_iter):
-        self.index = matches_iter.index
-
-    # def next_page(self, matches_iter):
-    #     matches_iter.index += (len(self.v_items) - self.v_index -1)
-    #     self.sync(matches_iter)
-    #     self._prepare_v_items()
-    #     self.v_index -= 1
-    #     self._show_v_items()
-    #     matches_iter.index -= 1
-    #     self.v_index += 1
-    #     self.sync(matches_iter)
-
-    def refresh(self):
-        self.scr.attron(app.get_colpair('main'))
-        self.scr.border()
-        self.scr.refresh()
-
-    def reset_with(self, repl, nosep=False):
-        y, x = repl.scr.getyx()
-        h, w = repl.scr.getmaxyx()
+    def reset_with(self, repl_, nosep=False):
+        y, _ = repl_.scr.getyx()
+        h, w = repl_.scr.getmaxyx()
         down = (y < h // 2)
         if down:
             max_h = h - y
@@ -313,139 +287,42 @@ class ListBox(object):
         self.max_h = max_h
         self.max_w = max_w
         self.y = y
-        self.index = -1
-        self.items = repl.matches
-        self.topline = repl.argspec
-        if hasattr(repl, 'docstring'):
-            self.docstring = repl.docstring
+        self.items = repl_.matches
+        self.sync(repl_.matches_iter)
+        self.topline = repl_.argspec
+        if hasattr(repl_.argspec, 'docstring'):
+            self.docstring = repl_.argspec.docstring
         else:
             self.docstring = None
 
-    def _show_doc(self):
-        self.scr.resize(self.rows, self.w)
+    def show(self):
+        if self.docstring is not None and len(self.items) < 2:
+            self.height_offset = self._show_topline() + 1
+            self._prepare_doc()
+            self._show_doc()
+        elif self.items:
+            self.height_offset = self._show_topline() + 1
+            self._prepare_v_items()
+            self._show_v_items()
 
-        if self.down:
-            self.scr.mvwin(self.y + 1, 0)
-        else:
-            self.scr.mvwin(self.y - self.rows - 2, 0)
+    def sync(self, matches_iter):
+        self.index = matches_iter.index
 
-        if not PY3 and isinstance(self.docstring, unicode):
-            self.docstring = self.docstring.encode(encoding, 'ignore')
-        self.scr.addstr('\n' + self.docstring, app.get_colpair('comment'))
-        # XXX: After all the trouble I had with sizing the list box (I'm not very good
-        # at that type of thing) I decided to do this bit of tidying up here just to
-        # make sure there's no unnececessary blank lines, it makes things look nicer.
+    def next_page(self, matches_iter):
+        if self.v_items[-1] == '...':
+            if matches_iter.is_wait:
+                self.v_index += 1
+            matches_iter.index += (len(self.v_items) - self.v_index -1)
+            self.sync(matches_iter)
+            self._prepare_v_items()
+            self.v_index -= 1
+            self._show_v_items()
+            matches_iter.wait()
 
-        h = self.scr.getyx()[0] + 2
-        self.scr.resize(h, self.w)
-
-    def _show_v_items(self):
-
-        self.scr.resize(self.rows + 2, self.w)
-
-        if self.down:
-            self.scr.mvwin(self.y + 1, 0)
-        else:
-            self.scr.mvwin(self.y - self.rows - 2, 0)
-
-        self.scr.addstr('\n ')
-
-        if not PY3:
-            encoding = getpreferredencoding()
-        for ix, i in enumerate(self.v_items):
-            padding = (self.wl - len(i)) * ' '
-            if ix == self.v_index:
-                color = app.get_colpair('operator')
-            else:
-                color = app.get_colpair('main')
-            if not PY3:
-                i = i.encode(encoding)
-            self.scr.addstr(i + padding, color)
-            if ((self.cols == 1 or (ix and not (ix + 1) % self.cols))
-                and ix + 1 < len(self.v_items)):
-                self.scr.addstr('\n ')
-
-        h = self.scr.getyx()[0] + 2
-        self.scr.resize(h, self.w)
-
-    def _prepare_doc(self):
-        self.height_offset = self._show_topline() + 1
-
-        self.v_items = []
-        self.rows = 1
-        self.cols = 1
-        self.wl = 2
-
-        if self.rows + self.height_offset < self.max_h:
-            self.rows += self.height_offset
-
-        self.w = self.max_w
-
-        docstrings = self.format_docstring(self.docstring, self.max_w - 2,
-                                           self.max_h - self.height_offset)
-        self.docstring = ''.join(docstrings)
-        self.rows += len(docstrings)
-
-    def _prepare_v_items(self):
-        self.height_offset = self._show_topline() + 1
-
-        if not self.nosep:
-            self._trim_items()
-
-        self.v_items = []
-        rows = 0
-        cols = 0
-        wl = 1
-
-        v_index = self.index
-        # visible items (we'll append until we can't fit any more in)
-        for i, item in enumerate(self.items):
-            item = item[:self.max_w - 3]
-            self.v_items.append(item)
-            wl = max(len(item), wl)
-            cols = ((self.max_w - 2) // (wl + 1)) or 1
-            rows = len(self.v_items) // cols
-
-            if cols * rows < len(self.v_items):
-                rows += 1
-
-            if rows + self.height_offset - 1 >= self.max_h:
-                rows = self.max_h - (self.height_offset - 1)
-                if self.index < i - 1:
-                    del self.v_items[-1]
-                    self.v_items[-1] = '...'
-                    self.v_index = v_index
-                    break
-                else:
-                    v_index -= (len(self.v_items) - 3)
-                    self.v_items = ['...', self.items[i - 1], self.items[i]]
-                    continue
-        else:
-            rows += 1
-            self.v_index = v_index % (len(self.v_items) + 1)
-
-        self.rows = rows
-        self.cols = cols
-        self.wl = wl + 1
-
-        # debug(u"index:%d v_index:%d i:%d v_length:%d" %(self.index, self.v_index, i, len(self.v_items)))
-
-        if self.wl + 3 > self.max_w:
-            self.w = self.max_w
-        else:
-            t = (self.cols + 1) * self.wl + 3
-            if t > self.max_w:
-                t = self.max_w
-            self.w = t
-
-    def _trim_items(self):
-        if self.items:
-            sep = '.'
-            if os.path.sep in self.items[0]:
-                # Filename completion
-                sep = os.path.sep
-            if sep in self.items[0]:
-                self.items = [x.rstrip(sep).rsplit(sep)[-1] for x in self.items]
+    def refresh(self):
+        self.scr.attron(app.get_colpair('main'))
+        self.scr.border()
+        self.scr.refresh()
 
     def _show_topline(self):
         """This figures out what to do with the argspec and puts it nicely into
@@ -464,49 +341,7 @@ class ListBox(object):
             self.scr.addstr('\n  ')
             return r
 
-        elif isinstance(self.topline, repl.CommandSpec):
-            name = self.topline[0]
-
-            self.scr.resize(3, self.max_w)
-
-            self.scr.addstr('\n  ')
-            self.scr.addstr(name, app.get_colpair('name') | curses.A_BOLD)
-            self.scr.addstr(': ', app.get_colpair('name'))
-            self.scr.addstr('command', app.get_colpair('name'))
-            return r
-
-        elif isinstance(self.topline, repl.KeySpec):
-            name = self.topline[0]
-
-            self.scr.resize(3, self.max_w)
-
-            self.scr.addstr('\n  ')
-            self.scr.addstr(name, app.get_colpair('name') | curses.A_BOLD)
-            self.scr.addstr(': ', app.get_colpair('name'))
-            self.scr.addstr('keyword', app.get_colpair('name'))
-            return r
-
-        elif isinstance(self.topline, repl.ObjSpec):
-            obj_name = self.topline[0]
-            obj = self.topline[1]
-
-            self.scr.resize(3, self.max_w)
-
-            self.scr.addstr('\n  ')
-
-            if inspect.isclass(obj):
-                class_name = 'class'
-            elif hasattr(obj, '__class__'):
-                class_name = obj.__class__.__name__
-            else:
-                class_name = 'unknown'
-
-            self.scr.addstr(obj_name, app.get_colpair('name') | curses.A_BOLD)
-            self.scr.addstr(': ', app.get_colpair('name'))
-            self.scr.addstr(class_name, app.get_colpair('name'))
-            return r
-
-        elif isinstance(self.topline, repl.ArgSpec):
+        elif isinstance(self.topline, inspection.ArgSpec):
             fn = self.topline[0]
             args = self.topline[1][0]
             kwargs = self.topline[1][3]
@@ -532,7 +367,7 @@ class ListBox(object):
             punctuation_colpair = app.get_colpair('punctuation')
 
             for k, i in enumerate(args):
-                y, x = self.scr.getyx()
+                _, x = self.scr.getyx()
                 ln = len(str(i))
                 kw = None
                 if kwargs and k + 1 > len(args) - len(kwargs):
@@ -606,6 +441,225 @@ class ListBox(object):
             self.scr.addstr(')', punctuation_colpair)
             return r
 
+        elif isinstance(self.topline, inspection.CommandSpec):
+            name = self.topline[0]
+
+            self.scr.resize(3, self.max_w)
+
+            self.scr.addstr('\n  ')
+            self.scr.addstr(name, app.get_colpair('name') | curses.A_BOLD)
+            self.scr.addstr(': ', app.get_colpair('name'))
+            self.scr.addstr('command', app.get_colpair('name'))
+            return r
+
+        elif isinstance(self.topline, inspection.KeySpec):
+            name = self.topline[0]
+
+            self.scr.resize(3, self.max_w)
+
+            self.scr.addstr('\n  ')
+            self.scr.addstr(name, app.get_colpair('name') | curses.A_BOLD)
+            self.scr.addstr(': ', app.get_colpair('name'))
+            self.scr.addstr('keyword', app.get_colpair('name'))
+            self.docstring = ""
+            return r
+
+        elif isinstance(self.topline, inspection.ImpSpec):
+            obj_name = self.topline[0]
+            obj = self.topline[1]
+
+            self.scr.resize(3, self.max_w)
+
+            self.scr.addstr('\n  ')
+
+            if obj is None:
+                class_name = 'module'
+            elif inspect.isclass(obj):
+                class_name = 'class'
+            elif hasattr(obj, '__class__') and hasattr(obj.__class__, '__name__'):
+                class_name = obj.__class__.__name__
+            else:
+                class_name = 'unknown'
+
+            if not (self.docstring is not None and len(self.items) < 2) and class_name == "module":
+                try:
+                    for summary in self.docstring.split('\n'):
+                        if summary.strip:
+                            break
+                except:
+                    summary = ""
+                self.scr.addstr(summary, app.get_colpair('keyword'))
+            else:
+
+                self.scr.addstr(obj_name, app.get_colpair('name') | curses.A_BOLD)
+                self.scr.addstr(': ', app.get_colpair('string'))
+                self.scr.addstr(class_name, app.get_colpair('keyword'))
+            return r
+
+        elif isinstance(self.topline, inspection.ObjSpec):
+            obj_name = self.topline[0]
+            obj = self.topline[1]
+
+            self.scr.resize(3, self.max_w)
+
+            self.scr.addstr('\n  ')
+
+            if inspect.isclass(obj):
+                class_name = 'class'
+            elif hasattr(obj, '__class__') and hasattr(obj.__class__, '__name__'):
+                class_name = obj.__class__.__name__
+            else:
+                class_name = 'unknown'
+
+            val = ""
+            if isinstance(obj, (int, float, complex, list, dict, set)):
+                val = str(obj)
+            elif not PY3 and isinstance(obj, long):
+                val = str(obj)
+            elif isinstance(obj, str):
+                val = '"' + str(obj) + '"'
+            elif not PY3 and isinstance(obj, unicode):
+                val = '"' + unicode(obj) + '"'
+            elif obj is None:
+                val = 'None'
+
+            self.scr.addstr(obj_name, app.get_colpair('name') | curses.A_BOLD)
+            if val:
+                if len(val) > self.max_w - 8 - len(obj_name):
+                    val = val[:self.max_w - 11 - len(obj_name)] + '...'
+                self.scr.addstr(' = ', app.get_colpair('string'))
+                self.scr.addstr(val, app.get_colpair('keyword'))
+                self.docstring = ""
+            else:
+                self.scr.addstr(': ', app.get_colpair('string'))
+                self.scr.addstr(class_name, app.get_colpair('keyword'))
+            return r
+
+        elif isinstance(self.topline, inspection.NoSpec):
+            self.scr.resize(3, self.max_w)
+            self.scr.addstr('\n  ')
+            return r
+
+
+    def _show_doc(self):
+        self.scr.resize(self.rows, self.w)
+
+        if self.down:
+            self.scr.mvwin(self.y + 1, 0)
+        else:
+            self.scr.mvwin(self.y - self.rows - 2, 0)
+
+        if not PY3 and isinstance(self.docstring, unicode):
+            self.docstring = self.docstring.encode(getpreferredencoding(), 'ignore')
+        self.scr.addstr('\n' + self.docstring, app.get_colpair('comment'))
+        # XXX: After all the trouble I had with sizing the list box (I'm not very good
+        # at that type of thing) I decided to do this bit of tidying up here just to
+        # make sure there's no unnececessary blank lines, it makes things look nicer.
+
+        h = self.scr.getyx()[0] + 2
+        self.scr.resize(h, self.w)
+
+    def _show_v_items(self):
+
+        self.scr.resize(self.rows + 2, self.w)
+
+        if self.down:
+            self.scr.mvwin(self.y + 1, 0)
+        else:
+            self.scr.mvwin(self.y - self.rows - 2, 0)
+
+        self.scr.addstr('\n ')
+
+        if not PY3:
+            encoding = getpreferredencoding()
+        for ix, i in enumerate(self.v_items):
+            padding = (self.wl - len(i)) * ' '
+            if ix == self.v_index:
+                color = app.get_colpair('operator')
+            else:
+                color = app.get_colpair('main')
+            if not PY3:
+                i = i.encode(encoding)
+            self.scr.addstr(i + padding, color)
+            if ((self.cols == 1 or (ix and not (ix + 1) % self.cols))
+                and ix + 1 < len(self.v_items)):
+                self.scr.addstr('\n ')
+
+        h = self.scr.getyx()[0] + 2
+        self.scr.resize(h, self.w)
+
+    def _prepare_doc(self):
+        self.v_items = []
+        self.rows = 1
+        self.cols = 1
+        self.wl = 2
+
+        if self.rows + self.height_offset < self.max_h:
+            self.rows += self.height_offset
+
+        self.w = self.max_w
+
+        docstrings = self.format_docstring(self.docstring, self.max_w - 2,
+                                           self.max_h - self.height_offset)
+        self.docstring = ''.join(docstrings)
+        self.rows += len(docstrings)
+
+    def _prepare_v_items(self):
+        if not self.nosep:
+            self._trim_items()
+
+        self.v_items = []
+        rows = 0
+        cols = 0
+        wl = 1
+
+        v_index = self.index
+        # visible items (we'll append until we can't fit any more in)
+        for i, item in enumerate(self.items):
+            item = item[:self.max_w - 3]
+            self.v_items.append(item)
+            wl = max(len(item), wl)
+            cols = ((self.max_w - 2) // (wl + 1)) or 1
+            rows = len(self.v_items) // cols
+
+            if cols * rows < len(self.v_items):
+                rows += 1
+
+            if rows + self.height_offset - 1 >= self.max_h:
+                rows = self.max_h - (self.height_offset - 1)
+                if self.index < i - 1:
+                    del self.v_items[-1]
+                    self.v_items[-1] = '...'
+                    self.v_index = v_index
+                    break
+                else:
+                    v_index -= (len(self.v_items) - 3)
+                    self.v_items = ['...', self.items[i - 1], self.items[i]]
+                    continue
+        else:
+            rows += 1
+            self.v_index = v_index % (len(self.v_items) + 1)
+
+        self.rows = rows
+        self.cols = cols
+        self.wl = wl + 1
+
+        if self.wl + 3 > self.max_w:
+            self.w = self.max_w
+        else:
+            t = (self.cols + 1) * self.wl + 3
+            if t > self.max_w:
+                t = self.max_w
+            self.w = t
+
+    def _trim_items(self):
+        if self.items:
+            sep = '.'
+            if os.path.sep in self.items[0]:
+                # Filename completion
+                sep = os.path.sep
+            if sep in self.items[0]:
+                self.items = [x.rstrip(sep).rsplit(sep)[-1] for x in self.items]
 
 class Editable(object):
     def __init__(self, scr, config):
@@ -709,7 +763,7 @@ class Editable(object):
 
         y, x = self.scr.getyx()
 
-        if self.cpos == 0 and i < 0:
+        if self.is_end_of_the_line and i < 0:
             return False
 
         if x == self.ix and y == self.iy and i >= 1:
@@ -757,7 +811,20 @@ class Editable(object):
             self.paste_mode = False
             self.print_line(self.s)
 
+    @property
     def is_beginning_of_the_line(self):
+        return self.cpos == len(self.s)
+
+    @property
+    def is_end_of_the_line(self):
+        return self.cpos == 0
+
+    @property
+    def is_empty_line(self):
+        return not self.s
+
+    @property
+    def is_start_of_the_line(self):
         """Return True or False accordingly if the cursor is at the beginning
         of the line (whitespace is ignored). This exists so that p_key() knows
         how to handle the tab key being pressed - if there is nothing but white
@@ -886,48 +953,48 @@ class Editable(object):
         self.mvc(-1)
 
     def backward_word(self):
-        if self.cpos == 0 and not self.s:
+        if self.is_empty_line:
             pass
         else:
             pos = len(self.s) - self.cpos - 1
-            while pos >= 0 and self.s[pos] in ' ':
-                pos -= 1
-                self.backward_character()
             if self.config.is_space_only_skip_char:
+                while pos >= 0 and self.s[pos] == ' ':
+                    pos -= 1
+                    self.backward_character()
                 if pos >= 0 and self.s[pos] in self.word_delimiter:
+                    pos -= 1
+                    self.backward_character()
+                while pos >= 0 and self.s[pos] == ' ':
                     pos -= 1
                     self.backward_character()
             else:
                 while pos >= 0 and self.s[pos] in self.word_delimiter:
                     pos -= 1
                     self.backward_character()
-            while pos >= 0 and self.s[pos] in ' ':
-                pos -= 1
-                self.backward_character()
             while pos >= 0 and self.s[pos] not in self.word_delimiter:
                 pos -= 1
                 self.backward_character()
 
     def forward_word(self):
-        if self.cpos == 0 and not self.s:
+        if self.is_empty_line:
             pass
         else:
             len_s = len(self.s)
             pos = len_s - self.cpos - 1
-            while len_s > pos and self.s[pos] in ' ':
-                pos += 1
-                self.forward_character()
             if self.config.is_space_only_skip_char:
+                while len_s > pos and self.s[pos] == ' ':
+                    pos += 1
+                    self.forward_character()
                 if len_s > pos and self.s[pos] in self.word_delimiter:
+                    pos += 1
+                    self.forward_character()
+                while len_s > pos and self.s[pos] == ' ':
                     pos += 1
                     self.forward_character()
             else:
                 while len_s > pos and self.s[pos] in self.word_delimiter:
                     pos += 1
                     self.forward_character()
-            while len_s > pos and self.s[pos] in ' ':
-                pos += 1
-                self.forward_character()
             while len_s > pos and self.s[pos] not in self.word_delimiter:
                 pos += 1
                 self.forward_character()
@@ -935,7 +1002,7 @@ class Editable(object):
     def backward_delete_character(self, delete_tabs=True):
         """Process a backspace"""
         y, x = self.scr.getyx()
-        if not self.s:
+        if self.is_empty_line:
             return
         if x == self.ix and y == self.iy:
             return
@@ -943,7 +1010,7 @@ class Editable(object):
         self.clear_wrapped_lines()
         if not self.cpos:
             # I know the nested if blocks look nasty. :(
-            if self.is_beginning_of_the_line() and delete_tabs:
+            if self.is_start_of_the_line and delete_tabs:
                 n = len(self.s) % self.config.tab_length
                 if not n:
                     n = self.config.tab_length
@@ -955,63 +1022,63 @@ class Editable(object):
 
     def delete_character(self):
         """Process a del"""
-        if not self.s:
+        if self.is_empty_line:
             return
 
         if self.mvc(-1):
             self.backward_delete_character(False)
 
     def kill_word(self):
-        if self.cpos == 0 and not self.s:
+        if self.is_empty_line:
             pass
         else:
             deleted = []
             len_s = len(self.s)
             pos = len_s - self.cpos
-            while self.cpos > 0 and self.s[pos] in ' ':
-                deleted.append(self.s[pos])
-                self.delete_character()
-                # Then we delete a full word.
             if self.config.is_space_only_skip_char:
+                while self.cpos > 0 and self.s[pos] == ' ':
+                    deleted.append(self.s[pos])
+                    self.delete_character()
+                    # Then we delete a full word.
                 if self.cpos > 0 and self.s[pos] in self.word_delimiter:
                     deleted.append(self.s[pos])
                     self.delete_character()
+                while self.cpos > 0 and self.s[pos] == ' ':
+                    deleted.append(self.s[pos])
+                    self.delete_character()
+                    # Then we delete a full word.
             else:
                 while self.cpos > 0 and self.s[pos] in self.word_delimiter:
                     deleted.append(self.s[pos])
                     self.delete_character()
-            while self.cpos > 0 and self.s[pos] in ' ':
-                deleted.append(self.s[pos])
-                self.delete_character()
-                # Then we delete a full word.
             while self.cpos > 0 and self.s[pos] not in self.word_delimiter:
                 deleted.append(self.s[pos])
                 self.delete_character()
             self.cut_buffer.append(''.join(deleted))
 
     def backward_kill_word(self):
-        if self.cpos == 0 and not self.s:
+        if self.is_empty_line:
             pass
         else:
             pos = len(self.s) - self.cpos - 1
             deleted = []
             # First we delete any space to the left of the cursor.
-            while pos >= 0 and self.s[pos] in ' ':
-                deleted.append(self.s[pos])
-                pos -= self.backward_delete_character()
-                # Then we delete a full word.
             if self.config.is_space_only_skip_char:
+                while pos >= 0 and self.s[pos] == ' ':
+                    deleted.append(self.s[pos])
+                    pos -= self.backward_delete_character()
+                    # Then we delete a full word.
                 if pos >= 0 and self.s[pos] in self.word_delimiter:
                     deleted.append(self.s[pos])
                     pos -= self.backward_delete_character()
+                while pos >= 0 and self.s[pos] == ' ':
+                    deleted.append(self.s[pos])
+                    pos -= self.backward_delete_character()
+                    # Then we delete a full word.
             else:
                 while pos >= 0 and self.s[pos] in self.word_delimiter:
                     deleted.append(self.s[pos])
                     pos -= self.backward_delete_character()
-            while pos >= 0 and self.s[pos] in ' ':
-                deleted.append(self.s[pos])
-                pos -= self.backward_delete_character()
-                # Then we delete a full word.
             while pos >= 0 and self.s[pos] not in self.word_delimiter:
                 deleted.append(self.s[pos])
                 pos -= self.backward_delete_character()
@@ -1019,7 +1086,7 @@ class Editable(object):
 
     def kill_line(self):
         """Clear from cursor to end of line, placing into cut buffer"""
-        if self.cpos == 0:
+        if self.is_end_of_the_line:
             pass
         else:
             self.cut_buffer.append(self.s[-self.cpos:])
@@ -1029,7 +1096,7 @@ class Editable(object):
 
     def backward_kill_line(self):
         """Clear from cursor to beginning of line, placing into cut buffer"""
-        if self.cpos == 0:
+        if self.is_end_of_the_line:
             if self.s:
                 self.cut_buffer.append(self.s)
             else:
@@ -1112,27 +1179,6 @@ class CLIRepl(repl.Repl, Editable):
         used to prevent autoindentation from occuring after a
         traceback."""
         self.s = ''
-
-    @property
-    def current_word(self):
-        """Return the current word, i.e. the (incomplete) word directly to the
-        left of the cursor"""
-
-        # I don't know if autocomplete should be disabled if the cursor
-        # isn't at the end of the line, but that's what this does for now.
-        if self.cpos: return
-
-        # look from right to left for a bad method character
-        l = len(self.s)
-
-        if not self.s or not repl.WORD.match(self.s[-1]):
-            return
-
-        for i in xrange(1, l + 1):
-            if not repl.WORD.match(self.s[-i]):
-                break
-
-        return self.s[-i:].strip()
 
     def addstr(self, s):
         """Add a string to the current input line and figure out
@@ -1488,19 +1534,15 @@ class CLIRepl(repl.Repl, Editable):
         self.scr.move(*self.scr.getyx())
         self.list_box.refresh()
 
-    # def show_next_page(self):
-    #     self.list_box.next_page(self.matches_iter)
-    #     app.statusbar.scr.touchwin()
-    #     app.statusbar.scr.noutrefresh()
-    #     app.clirepl.scr.touchwin()
-    #     app.clirepl.scr.cursyncup()
-    #     app.clirepl.scr.noutrefresh()
-    #
-    #     # This looks a little odd, but I can't figure a better way to stick the cursor
-    #     # back where it belongs (refreshing the window hides the list_win)
-    #
-    #     app.clirepl.scr.move(*app.clirepl.scr.getyx())
-    #     self.list_box.refresh()
+    def show_next_page(self):
+        self.list_box.next_page(self.matches_iter)
+        app.statusbar.scr.touchwin()
+        app.statusbar.scr.noutrefresh()
+        app.clirepl.scr.touchwin()
+        app.clirepl.scr.cursyncup()
+        app.clirepl.scr.noutrefresh()
+        app.clirepl.scr.move(*app.clirepl.scr.getyx())
+        self.list_box.refresh()
 
     def size(self):
         """Set instance attributes for x and y top left corner coordinates
@@ -1542,7 +1584,7 @@ class CLIRepl(repl.Repl, Editable):
         mode = self.config.autocomplete_mode
 
         # 1. check if we should add a tab character
-        if self.is_beginning_of_the_line() and not back:
+        if self.is_start_of_the_line and not back:
             x_pos = len(self.s) - self.cpos
             num_spaces = x_pos % self.config.tab_length
             if not num_spaces:
@@ -1591,7 +1633,10 @@ class CLIRepl(repl.Repl, Editable):
         if not expanded and self.matches:
             # reset s if this is the nth result
             if self.matches_iter:
-                self.s = self.s[:-len(self.matches_iter.current())] + current_word
+                if self.cpos:
+                    self.s = self.s[:-len(self.matches_iter.current())-self.cpos] + current_word + self.s[-self.cpos:]
+                else:
+                    self.s = self.s[:-len(self.matches_iter.current())] + current_word
 
             if back:
                 current_match = self.matches_iter.previous()
@@ -1605,37 +1650,28 @@ class CLIRepl(repl.Repl, Editable):
 
             # update s with the new match
             if current_match:
+                if self.config.autocomplete_mode == completer.SIMPLE:
+                    self.s += current_match[len(current_word):]
+                elif self.in_search_mode:
+                    self.s = current_match
+                else:
+                    if self.cpos:
+                        self.s = self.s[:-len(current_word)-self.cpos] + current_match + self.s[-self.cpos:]
+                    else:
+                        self.s = self.s[:-len(current_word)] + current_match
                 try:
                     if self.in_search_mode:
                         self.list_box.nosep = True
                         self.show_list_box()
                     else:
-                        if not self.set_argspec(current_match):
-                            if keyword.iskeyword(current_match):
-                                self.argspec = repl.KeySpec([current_match])
-                            elif self.interp.is_commandline(current_match):
-                                command_spec = self.interp.get_command_spec(current_match)
-                                self.argspec = repl.CommandSpec(command_spec)
-                            else:
-                                try:
-                                    obj = app.clirepl.get_object(current_match)
-                                    self.argspec = repl.ObjSpec([current_match, obj])
-                                except (SyntaxError, NameError, AttributeError):
-                                    self.argspec = None
-                        self.list_box.topline = self.argspec
-                        self.show_list_box()
+                        self.set_argspec()
+                        self.reset_and_show_list_box()
                 except curses.error:
                     # XXX: This is a massive hack, it will go away when I get
                     # cusswords into a good enough state that we can start
                     # using it.
                     self.list_box.refresh()
 
-                if self.config.autocomplete_mode == completer.SIMPLE:
-                    self.s += current_match[len(current_word):]
-                elif self.in_search_mode:
-                    self.s = current_match
-                else:
-                    self.s = self.s[:-len(current_word)] + current_match
 
                 self.print_line(self.s, True)
         return True
@@ -1650,102 +1686,6 @@ class CLIRepl(repl.Repl, Editable):
         for line in lines:
             self.write('\x01%s\x03%s' % (self.config.color_scheme['error'],
                                          line))
-
-    def tokenize(self, s, newline=False):
-        """Tokenize a line of code."""
-
-        source = '\n'.join(self.buffer + [s])
-        cursor = len(source) - self.cpos
-        if self.cpos:
-            cursor += 1
-        stack = list()
-        all_tokens = list(PythonLexer().get_tokens(source))
-        # Unfortunately, Pygments adds a trailing newline and strings with
-        # no size, so strip them
-        while not all_tokens[-1][1]:
-            all_tokens.pop()
-        all_tokens[-1] = (all_tokens[-1][0], all_tokens[-1][1].rstrip('\n'))
-        line = pos = 0
-        parens = dict(zip('{([', '})]'))
-        line_tokens = list()
-        saved_tokens = list()
-        search_for_paren = True
-        for (token, value) in self._split_lines(all_tokens):
-            pos += len(value)
-            if token is Token.Text and value == '\n':
-                line += 1
-                # Remove trailing newline
-                line_tokens = list()
-                saved_tokens = list()
-                continue
-            line_tokens.append((token, value))
-            saved_tokens.append((token, value))
-            if not search_for_paren:
-                continue
-            under_cursor = (pos == cursor)
-            if token is Token.Punctuation:
-                if value in parens:
-                    if under_cursor:
-                        line_tokens[-1] = (Parenthesis.UnderCursor, value)
-                        # Push marker on the stack
-                        stack.append((Parenthesis, value))
-                    else:
-                        stack.append((line, len(line_tokens) - 1,
-                                      line_tokens, value))
-                elif value in parens.values():
-                    saved_stack = list(stack)
-                    try:
-                        while True:
-                            opening = stack.pop()
-                            if parens[opening[-1]] == value:
-                                break
-                    except IndexError:
-                        # SyntaxError.. more closed parentheses than
-                        # opened or a wrong closing paren
-                        opening = None
-                        if not saved_stack:
-                            search_for_paren = False
-                        else:
-                            stack = saved_stack
-                    if opening and opening[0] is Parenthesis:
-                        # Marker found
-                        line_tokens[-1] = (Parenthesis, value)
-                        search_for_paren = False
-                    elif opening and under_cursor and not newline:
-                        if self.cpos:
-                            line_tokens[-1] = (Parenthesis.UnderCursor, value)
-                        else:
-                            # The cursor is at the end of line and next to
-                            # the paren, so it doesn't reverse the paren.
-                            # Therefore, we insert the Parenthesis token
-                            # here instead of the Parenthesis.UnderCursor
-                            # token.
-                            line_tokens[-1] = (Parenthesis, value)
-                        (lineno, i, tokens, opening) = opening
-                        if lineno == len(self.buffer):
-                            self.highlighted_paren = (lineno, saved_tokens)
-                            line_tokens[i] = (Parenthesis, opening)
-                        else:
-                            self.highlighted_paren = (lineno, list(tokens))
-                            # We need to redraw a line
-                            tokens[i] = (Parenthesis, opening)
-                            self.reprint_line(lineno, tokens)
-                        search_for_paren = False
-                elif under_cursor:
-                    search_for_paren = False
-        if line != len(self.buffer):
-            return list()
-        return line_tokens
-
-    def _split_lines(self, tokens):
-        for (token, value) in tokens:
-            if not value:
-                continue
-            while value:
-                head, newline, value = value.partition('\n')
-                yield (token, head)
-                if newline:
-                    yield (Token.Text, newline)
 
 
 class Statusbar(Editable):
@@ -1895,7 +1835,7 @@ class App(object):
         if locals_ is None:
             sys.modules['__main__'] = ModuleType('__main__')
             locals_ = sys.modules['__main__'].__dict__
-        self.interpreter = repl.Interpreter(locals_, getpreferredencoding())
+        self.interpreter = BPythonInterpreter(locals_, getpreferredencoding())
 
         self.clirepl = CLIRepl(main_win, self.interpreter, config)
         self.clirepl._C = self.colors
@@ -2018,7 +1958,7 @@ class App(object):
         messages and the resize handlers need to be here to make
         sure it happens conveniently."""
 
-        if importcompletion.find_coroutine() or caller.paste_mode:
+        if import_completer.find_coroutine() or caller.paste_mode:
             caller.scr.nodelay(True)
             key = caller.scr.getch()
             caller.scr.nodelay(False)

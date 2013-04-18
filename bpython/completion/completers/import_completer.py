@@ -23,6 +23,7 @@
 from __future__ import with_statement
 
 import imp
+import itertools
 import os
 import sys
 import warnings
@@ -45,18 +46,87 @@ from bpython._py3compat import PY3
 from six import next
 
 # The cached list of all known modules
-modules = set()
+modules = dict()
+sorted_modules = []
 fully_loaded = False
 
 
-def complete(line, cw):
+def get_object(cw, line):
+    if not cw:
+        cw = ""
+    tokens = line.split()
+
+    completing_from = False
+    if len(tokens) == 1:
+        return
+    if tokens[0] == 'from':
+        if len(tokens) > 3:
+            if '.' in cw:
+                # This will result in a SyntaxError, so do not return
+                # any matches
+                return None
+            completing_from = True
+            cw = '%s.%s' % (tokens[1], cw)
+        elif len(tokens) == 3:
+            if 'import '.startswith(cw):
+                return None
+            else:
+                # Will result in a SyntaxError
+                return None
+
+    match_objects = list()
+    for name in sorted_modules:
+        if not (name == cw and name.find('.', len(cw)) == -1):
+            continue
+        try:
+            obj = sys.modules[name]
+        except:
+            if modules[name].endswith('.pyc'):
+                f = modules[name][:-1]
+                if os.path.isfile(f):
+                    obj = f
+                else:
+                    obj = None
+            else:
+                obj = None
+        if completing_from:
+            name = name[len(tokens[1]) + 1:]
+            try:
+                obj = getattr(obj, name)
+            except:
+                obj = None
+        match_objects.append(obj)
+    if completing_from and tokens[1] in sys.modules:
+        # from x import y -> search for attributes starting with y if
+        # x is in sys.modules
+        _, _, cw = cw.rpartition('.')
+        module = sys.modules[tokens[1]]
+        names = [name for name in dir(module) if name == cw]
+        objects = [getattr(module, name) for name in names]
+        match_objects.extend(objects)
+    elif len(tokens) == 2:
+        # from x.y or import x.y -> search for attributes starting
+        # with y if x is in sys.modules and the attribute is also in
+        # sys.modules
+        module_name, _, cw = cw.rpartition('.')
+        if module_name in sys.modules:
+            module = sys.modules[module_name]
+            for name in dir(module):
+                if name != cw:
+                    continue
+                submodule_name = '%s.%s' % (module_name, name)
+                if submodule_name in sys.modules:
+                    match_objects.append(sys.modules[submodule_name])
+    if not match_objects:
+        return None
+    return match_objects[0]
+
+def complete(cw, line):
     """Construct a full list of possibly completions for imports."""
     if not cw:
         return None
 
     tokens = line.split()
-    if tokens[0] not in ['from', 'import']:
-        return None
 
     completing_from = False
     if tokens[0] == 'from':
@@ -75,7 +145,7 @@ def complete(line, cw):
                 return None
 
     matches = list()
-    for name in modules:
+    for name in sorted_modules:
         if not (name.startswith(cw) and name.find('.', len(cw)) == -1):
             continue
         if completing_from:
@@ -86,7 +156,8 @@ def complete(line, cw):
         # x is in sys.modules
         _, _, cw = cw.rpartition('.')
         module = sys.modules[tokens[1]]
-        matches.extend(name for name in dir(module) if name.startswith(cw))
+        names = [name for name in dir(module) if name.startswith(cw)]
+        matches.extend(names)
     elif len(tokens) == 2:
         # from x.y or import x.y -> search for attributes starting
         # with y if x is in sys.modules and the attribute is also in
@@ -116,6 +187,7 @@ def find_modules(path):
     except EnvironmentError:
         filenames = []
     for name in filenames:
+        filename = name
         if not any(name.endswith(suffix[0]) for suffix in imp.get_suffixes()):
             # Possibly a package
             if '.' in name:
@@ -146,30 +218,35 @@ def find_modules(path):
                 fo.close()
             else:
                 # Yay, package
-                for subname in find_modules(pathname):
+                for subname, filename in find_modules(pathname):
                     if subname != '__init__':
-                        yield '%s.%s' % (name, subname)
-            yield name
+                        yield '%s.%s' % (name, subname), os.path.join(pathname, filename)
+            yield name, filename
 
 
 def find_all_modules(path=None):
     """Return a list with all modules in `path`, which should be a list of
     directory names. If path is not given, sys.path will be used."""
+    global sorted_modules
+
+    i = itertools.repeat(None)
     if path is None:
-        modules.update(sys.builtin_module_names)
+        d = dict(zip(sys.builtin_module_names, i))
+        modules.update(d)
         path = sys.path
 
     for p in path:
         if not p:
             p = os.curdir
-        for module in find_modules(p):
+        for module, filename in find_modules(p):
             if not PY3 and not isinstance(module, unicode):
                 try:
                     module = module.decode(sys.getfilesystemencoding())
                 except UnicodeDecodeError:
                     # Not importable anyway, ignore it
                     continue
-            modules.add(module)
+            modules[module] = os.path.join(p, filename)
+            sorted_modules = sorted(modules)
             yield
 
 

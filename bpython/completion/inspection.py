@@ -22,7 +22,6 @@
 #
 
 from __future__ import with_statement
-import collections
 import inspect
 import keyword
 import pydoc
@@ -36,6 +35,24 @@ from bpython._py3compat import PythonLexer, PY3
 
 if not PY3:
     _name = re.compile(r'[a-zA-Z_]\w*$')
+
+
+class ObjSpec(list): pass
+
+
+class ImpSpec(list): pass
+
+
+class KeySpec(list): pass
+
+
+class CommandSpec(list): pass
+
+
+class ArgSpec(list): pass
+
+
+class NoSpec(list): pass
 
 
 class AttrCleaner(object):
@@ -86,7 +103,8 @@ class AttrCleaner(object):
             setattr(type_, '__getattribute__', __getattribute__)
         if __getattr__ is not None:
             setattr(type_, '__getattr__', __getattr__)
-        # /Dark magic
+            # /Dark magic
+
 
 class _Repr(object):
     """
@@ -100,6 +118,7 @@ class _Repr(object):
         return self.value
 
     __str__ = __repr__
+
 
 def parsekeywordpairs(signature):
     tokens = PythonLexer().get_tokens(signature)
@@ -122,7 +141,7 @@ def parsekeywordpairs(signature):
                 # End of signature reached
                 break
             if ((value == ',' and parendepth == 0) or
-                  (value == ')' and parendepth == -1)):
+                    (value == ')' and parendepth == -1)):
                 stack.append(substack)
                 substack = []
                 continue
@@ -216,8 +235,8 @@ def getargspec(func, f):
 
     try:
         is_bound_method = ((inspect.ismethod(f) and f.im_self is not None)
-                    or (func_name == '__init__' and not
-                        func.endswith('.__init__')))
+                           or (func_name == '__init__' and not
+        func.endswith('.__init__')))
     except:
         # if f is a method from a xmlrpclib.Server instance, func_name ==
         # '__init__' throws xmlrpclib.Fault (see #202)

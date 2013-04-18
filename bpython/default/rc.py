@@ -9,6 +9,7 @@ def register_keys():
     def do_show_source(dispatcher):
         from bpython.translations import _
         from plugins.introspection import show_source
+
         obj = dispatcher.owner.current_object
         if obj is not None:
             show_source(obj)
@@ -19,6 +20,7 @@ def register_keys():
     @bpython.running.set_handler_on_clirepl('F9')
     def do_pager(dispatcher):
         from plugins.introspection import page
+
         page(dispatcher.owner.stdout)
         return ''
 

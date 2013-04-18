@@ -191,16 +191,28 @@ class Dispatcher(object):
 
     @dispatch_table.set_handler_on_clirepl('C-s')
     def do_search_history(self):
-        self.owner.search_history()
+        if self.owner.in_search_mode == "search" and self.owner.s:
+            self.owner.show_next_page()
+        # elif self.owner.in_search_mode == "reverse" and self.owner.s:
+            # pass
+        else:
+            self.owner.search_history()
         return ''
 
     @dispatch_table.set_handler_on_clirepl('C-r')
     def do_reverse_search_history(self):
-        # if self.owner.in_search_mode == "reverse" and self.owner.s:
-        #     self.owner.show_next_page()
-        # else:
-        #     self.owner.reverse_search_history()
-        self.owner.reverse_search_history()
+        if self.owner.in_search_mode == "reverse" and self.owner.s:
+            self.owner.show_next_page()
+        # elif self.owner.in_search_mode == "search" and self.owner.s:
+            # pass
+        else:
+            self.owner.reverse_search_history()
+        return ''
+
+    @dispatch_table.set_handler_on_clirepl('C-x')
+    def debug(self):
+        from bpython.cli import debug
+        debug(str(self.owner.matches_iter.current()))
         return ''
 
     @dispatch_table.set_handler_on_clirepl('M-. M-_')

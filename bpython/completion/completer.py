@@ -28,6 +28,8 @@ import rlcompleter
 import re
 import keyword
 import inspect
+from bpython.completion.completers import import_completer
+from bpython.completion.completers import file_completer
 from bpython.completion import inspection
 from bpython._py3compat import PY3
 from six.moves import builtins
@@ -53,7 +55,7 @@ FUZZY = 'fuzzy'
 WITHOUT_CALLABLE_POSTFIX = set(['basestring'])
 
 
-class Completer(rlcompleter.Completer):
+class BPythonCompleter(rlcompleter.Completer):
     def __init__(self, locals_=None, config=None):
         assert config.autocomplete_mode in ['simple', 'fuzzy', 'substring']
 
@@ -62,16 +64,26 @@ class Completer(rlcompleter.Completer):
         self.autocomplete_mode = config.autocomplete_mode
         self.commands = []
         self.with_command = False
-        self.with_keyword = True
+        self.custom_method_matches = None
+        self.custom_global_matches = None
 
-    def complete(self, text, state, with_command=False, with_keyword=True):
+    def file_complete(self, text):
+        self.matches = file_completer.complete(text)
+
+    def import_complete(self, text, line):
+        self.matches = import_completer.complete(text, line)
+
+    def complete(self, text, with_command=False,
+                 custom_method_matches=None, custom_global_matches=None):
         self.with_command = with_command
-        self.with_keyword = with_keyword
+        self.custom_method_matches = custom_method_matches
+        self.custom_global_matches = custom_global_matches
         try:
-            return rlcompleter.Completer.complete(self, text, state)
+            return rlcompleter.Completer.complete(self, text, 0)
         finally:
             self.with_command = False
-            self.with_keyword = True
+            self.custom_method_matches = None
+            self.custom_global_matches = None
 
 
     def register_command(self, word):
@@ -85,20 +97,22 @@ class Completer(rlcompleter.Completer):
 
         words = set()
         n = len(text)
+        if self.custom_global_matches:
+            for word in self.custom_global_matches:
+                if self._method_match(word, n, text):
+                    words.add(word)
         if self.with_command:
             for word in self.commands:
                 if self._method_match(word, n, text):
                     words.add(word)
-        if self.with_keyword:
-            for word in keyword.kwlist:
-                if self._method_match(word, n, text):
-                    words.add(word)
+        for word in keyword.kwlist:
+            if self._method_match(word, n, text):
+                words.add(word)
         for nspace in [builtins.__dict__, self.locals]:
             for word, val in nspace.items():
                 if self._method_match(word, len(text), text) and word != "__builtins__":
                     words.add(self._callable_postfix(val, word))
-        matches = sorted(words)
-        return matches
+        return sorted(self._private_filter(text, words))
 
     def attr_matches(self, text):
         """Taken from rlcompleter.py and bent to my will.
@@ -107,7 +121,7 @@ class Completer(rlcompleter.Completer):
         # Gna, Py 2.6's rlcompleter searches for __call__ inside the
         # instance instead of the type, so we monkeypatch to prevent
         # side-effects (__getattr__/__getattribute__)
-        m = re.match(r"(\w+(\.\w+)*)\.(\w*)", text)
+        m = re.match(r"(\w+(\.\w+)*)\.(\w*\(?)", text)
         if not m:
             return []
 
@@ -118,11 +132,16 @@ class Completer(rlcompleter.Completer):
             return []
         try:
             obj = eval(expr, self.locals)
-        except (NameError, SyntaxError):
+        # except (NameError, SyntaxError):
+        except Exception:
             return []
         else:
             with inspection.AttrCleaner(obj):
                 matches = self._attr_lookup(obj, expr, attr)
+            if self.custom_method_matches:
+                for match in self.custom_method_matches:
+                    if self._method_match(match, len(attr), attr):
+                        matches.add(match)
             return matches
 
     def _attr_lookup(self, obj, expr, attr):
@@ -130,25 +149,27 @@ class Completer(rlcompleter.Completer):
         be wrapped in a safe try/finally block in case anything bad happens to
         restore the original __getattribute__ method."""
 
-        words = []
+        words = set()
         for k, v in inspect.getmembers(obj):
-            words.append(self._callable_postfix(v, k))
+            words.add(self._callable_postfix(v, k))
 
         if hasattr(obj, '__class__'):
+            words.add('__class__')
             for k, v in inspect.getmembers(obj.__class__):
-                words.append(self._callable_postfix(v, k))
+                words.add(self._callable_postfix(v, k))
 
         if hasattr(obj, '__class__') and has_abc and not isinstance(obj.__class__, abc.ABCMeta):
             try:
                 words.remove('__abstractmethods__')
-            except ValueError:
+            except KeyError:
                 pass
 
         matches = []
         n = len(attr)
-        for word in words:
+        for word in self._private_filter(attr, words):
             if self._method_match(word, n, attr) and word != "__builtins__":
                 matches.append("%s.%s" % (expr, word))
+                # raise Exception(str(matches))
         return sorted(matches)
 
     def _callable_postfix(self, value, word):
@@ -162,8 +183,17 @@ class Completer(rlcompleter.Completer):
                     word += '('
         return word
 
+    def _private_filter(self, text, matches):
+        if text.startswith('_'):
+            return (match for match in matches if match.startswith('_'))
+        else:
+            return (match for match in matches if not match.startswith('_'))
+
     def _method_match(self, word, size, text):
-        if self.autocomplete_mode == SIMPLE:
+        #remove ambiguity
+        if text.endswith("("):
+            return word == text
+        elif self.autocomplete_mode == SIMPLE:
             return word[:size] == text
         elif self.autocomplete_mode == SUBSTRING:
             s = r'.*%s.*' % text
