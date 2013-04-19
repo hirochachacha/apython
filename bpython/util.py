@@ -25,7 +25,82 @@
 
 import locale
 import sys
+import multiprocessing
+import pickle
+
+
+class TimeOutException(Exception): pass
 
 
 def getpreferredencoding():
     return locale.getpreferredencoding() or sys.getdefaultencoding()
+
+
+def debug(s):
+    import bpython
+    bpython.running.clirepl.interact.notify(str(s))
+
+
+class Dummy(object): pass
+
+
+def _dumps(obj):
+    try:
+        result = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
+    except pickle.PicklingError:
+        dummy = Dummy()
+        dummy.class_name = obj.__class__.__name__
+        dummy.__doc__ = obj.__doc__
+        result = pickle.dumps(dummy, pickle.HIGHEST_PROTOCOL)
+    return result
+
+
+def _loads(data):
+    return pickle.loads(data)
+
+
+def isolate(func):
+    def child_func(*args, **kwargs):
+        in_ = args[0]
+        try:
+            data = _dumps(func(*args[1], **kwargs))
+            in_.send_bytes(data)
+        except Exception:
+            e = sys.exc_info()[1]
+            e = _dumps(e)
+            in_.send_bytes(e)
+        finally:
+            in_.close()
+
+    def inner(*args, **kwargs):
+        out, in_ = multiprocessing.Pipe()
+        _stdout = sys.stdout
+        _stderr = sys.stderr
+        _stdin = sys.stdin
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+        sys.stdin = sys.__stdin__
+        try:
+            process = multiprocessing.Process(target=child_func, args=(in_, args), kwargs=kwargs)
+            process.start()
+            process.join(0.2)
+            if process.exitcode == 0 and out.poll(0.1):
+                result = _loads(out.recv_bytes())
+            else:
+                process.terminate()
+                result = TimeOutException()
+            if isinstance(result, Exception):
+                raise result
+        finally:
+            if process.is_alive:
+                process.terminate()
+            sys.stdout = _stdout
+            sys.stderr = _stderr
+            sys.stdin = _stdin
+            out.close()
+        return result
+
+    return inner
+
+
+safe_eval = isolate(eval)

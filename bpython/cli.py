@@ -82,7 +82,7 @@ from bpython import translations
 from bpython.translations import _
 
 from bpython import repl
-from bpython.util import getpreferredencoding
+from bpython.util import getpreferredencoding, debug, Dummy
 import bpython.config.args
 
 from bpython.interpreter import BPythonInterpreter
@@ -95,10 +95,6 @@ from six.moves import map, xrange
 app = None
 clipboard = []
 # ---
-
-
-def debug(s):
-    app.clirepl.interact.notify(str(s))
 
 
 class FakeStream(object):
@@ -330,6 +326,11 @@ class ListBox(object):
         self.scr.border()
         self.scr.refresh()
 
+    def addstr(self, s, *args):
+        if not PY3 and isinstance(s, unicode):
+            s = s.encode(getpreferredencoding(), errors='ignore')
+        return self.scr.addstr(s, *args)
+
     def _show_topline(self):
         """This figures out what to do with the argspec and puts it nicely into
         the list window. It returns the number of lines used to display the
@@ -344,7 +345,7 @@ class ListBox(object):
 
         if self.topline is None:
             self.scr.resize(3, self.max_w)
-            self.scr.addstr('\n  ')
+            self.addstr('\n  ')
             return r
 
         elif isinstance(self.topline, inspection.ArgSpec):
@@ -361,10 +362,10 @@ class ListBox(object):
             self.scr.resize(3, self.max_w)
             h, w = self.scr.getmaxyx()
 
-            self.scr.addstr('\n  ')
-            self.scr.addstr(fn,
+            self.addstr('\n  ')
+            self.addstr(fn,
                             app.get_colpair('name') | curses.A_BOLD)
-            self.scr.addstr(': (', app.get_colpair('name'))
+            self.addstr(': (', app.get_colpair('name'))
             max_h = app.clirepl.scr.getmaxyx()[0]
 
             if is_bound_method and isinstance(in_arg, int):
@@ -392,7 +393,7 @@ class ListBox(object):
                     else:
                         break
                     r += 1
-                    self.scr.addstr('\n\t')
+                    self.addstr('\n\t')
 
                 if str(i) == 'self' and k == 0:
                     color = app.get_colpair('name')
@@ -406,45 +407,45 @@ class ListBox(object):
                     # See issue #138: We need to format tuple unpacking correctly
                     # We use the undocumented function inspection.strseq() for
                     # that. Fortunately, that madness is gone in Python 3.
-                    self.scr.addstr(inspect.strseq(i, str), color)
+                    self.addstr(inspect.strseq(i, str), color)
                 else:
-                    self.scr.addstr(str(i), color)
+                    self.addstr(str(i), color)
                 if kw is not None:
-                    self.scr.addstr('=', punctuation_colpair)
-                    self.scr.addstr(kw, app.get_colpair('token'))
+                    self.addstr('=', punctuation_colpair)
+                    self.addstr(kw, app.get_colpair('token'))
                 if k != len(args) - 1:
-                    self.scr.addstr(', ', punctuation_colpair)
+                    self.addstr(', ', punctuation_colpair)
 
             if _args:
                 if args:
-                    self.scr.addstr(', ', punctuation_colpair)
-                self.scr.addstr('*%s' % (_args, ),
+                    self.addstr(', ', punctuation_colpair)
+                self.addstr('*%s' % (_args, ),
                                 app.get_colpair('token'))
 
             if PY3 and kwonly:
                 if not _args:
                     if args:
-                        self.scr.addstr(', ', punctuation_colpair)
-                    self.scr.addstr('*', punctuation_colpair)
+                        self.addstr(', ', punctuation_colpair)
+                    self.addstr('*', punctuation_colpair)
                 marker = object()
                 for arg in kwonly:
-                    self.scr.addstr(', ', punctuation_colpair)
+                    self.addstr(', ', punctuation_colpair)
                     color = app.get_colpair('token')
                     if arg == in_arg:
                         color |= curses.A_BOLD
-                    self.scr.addstr(arg, color)
+                    self.addstr(arg, color)
                     default = kwonly_defaults.get(arg, marker)
                     if default is not marker:
-                        self.scr.addstr('=', punctuation_colpair)
-                        self.scr.addstr(repr(default),
+                        self.addstr('=', punctuation_colpair)
+                        self.addstr(repr(default),
                                         app.get_colpair('token'))
 
             if _kwargs:
                 if args or _args or (PY3 and kwonly):
-                    self.scr.addstr(', ', punctuation_colpair)
-                self.scr.addstr('**%s' % (_kwargs, ),
+                    self.addstr(', ', punctuation_colpair)
+                self.addstr('**%s' % (_kwargs, ),
                                 app.get_colpair('token'))
-            self.scr.addstr(')', punctuation_colpair)
+            self.addstr(')', punctuation_colpair)
             return r
 
         elif isinstance(self.topline, inspection.CommandSpec):
@@ -452,10 +453,10 @@ class ListBox(object):
 
             self.scr.resize(3, self.max_w)
 
-            self.scr.addstr('\n  ')
-            self.scr.addstr(name, app.get_colpair('name') | curses.A_BOLD)
-            self.scr.addstr(': ', app.get_colpair('name'))
-            self.scr.addstr('command', app.get_colpair('name'))
+            self.addstr('\n  ')
+            self.addstr(name, app.get_colpair('name') | curses.A_BOLD)
+            self.addstr(': ', app.get_colpair('name'))
+            self.addstr('command', app.get_colpair('name'))
             return r
 
         elif isinstance(self.topline, inspection.KeySpec):
@@ -463,10 +464,10 @@ class ListBox(object):
 
             self.scr.resize(3, self.max_w)
 
-            self.scr.addstr('\n  ')
-            self.scr.addstr(name, app.get_colpair('name') | curses.A_BOLD)
-            self.scr.addstr(': ', app.get_colpair('name'))
-            self.scr.addstr('keyword', app.get_colpair('name'))
+            self.addstr('\n  ')
+            self.addstr(name, app.get_colpair('name') | curses.A_BOLD)
+            self.addstr(': ', app.get_colpair('name'))
+            self.addstr('keyword', app.get_colpair('name'))
             self.docstring = ""
             return r
 
@@ -476,7 +477,7 @@ class ListBox(object):
 
             self.scr.resize(3, self.max_w)
 
-            self.scr.addstr('\n  ')
+            self.addstr('\n  ')
 
             if obj is None:
                 class_name = 'module'
@@ -494,12 +495,12 @@ class ListBox(object):
                             break
                 except:
                     summary = ""
-                self.scr.addstr(summary, app.get_colpair('keyword'))
+                self.addstr(summary, app.get_colpair('keyword'))
             else:
 
-                self.scr.addstr(obj_name, app.get_colpair('name') | curses.A_BOLD)
-                self.scr.addstr(': ', app.get_colpair('string'))
-                self.scr.addstr(class_name, app.get_colpair('keyword'))
+                self.addstr(obj_name, app.get_colpair('name') | curses.A_BOLD)
+                self.addstr(': ', app.get_colpair('string'))
+                self.addstr(class_name, app.get_colpair('keyword'))
             return r
 
         elif isinstance(self.topline, inspection.ObjSpec):
@@ -508,7 +509,7 @@ class ListBox(object):
 
             self.scr.resize(3, self.max_w)
 
-            self.scr.addstr('\n  ')
+            self.addstr('\n  ')
 
             if inspect.isclass(obj):
                 class_name = 'class'
@@ -518,32 +519,34 @@ class ListBox(object):
                 class_name = 'unknown'
 
             val = ""
-            if isinstance(obj, (int, float, complex, list, dict, set)):
+            if isinstance(obj, (int, float, complex, list, dict, set, tuple)):
                 val = str(obj)
             elif not PY3 and isinstance(obj, long):
                 val = str(obj)
             elif isinstance(obj, str):
-                val = '"' + str(obj) + '"'
+                val = '"' + obj + '"'
             elif not PY3 and isinstance(obj, unicode):
-                val = '"' + unicode(obj) + '"'
+                val = 'u"' + obj + '"'
+            elif isinstance(obj, Dummy):
+                class_name = obj.class_name
             elif obj is None:
                 return r
 
-            self.scr.addstr(obj_name, app.get_colpair('name') | curses.A_BOLD)
+            self.addstr(obj_name, app.get_colpair('name') | curses.A_BOLD)
             if val:
                 if len(val) > self.max_w - 8 - len(obj_name):
                     val = val[:self.max_w - 11 - len(obj_name)] + '...'
-                self.scr.addstr(' = ', app.get_colpair('string'))
-                self.scr.addstr(val, app.get_colpair('keyword'))
+                self.addstr(' = ', app.get_colpair('string'))
+                self.addstr(val, app.get_colpair('keyword'))
                 self.docstring = ""
             else:
-                self.scr.addstr(': ', app.get_colpair('string'))
-                self.scr.addstr(class_name, app.get_colpair('keyword'))
+                self.addstr(': ', app.get_colpair('string'))
+                self.addstr(class_name, app.get_colpair('keyword'))
             return r
 
         elif isinstance(self.topline, inspection.NoSpec):
             self.scr.resize(3, self.max_w)
-            self.scr.addstr('\n  ')
+            self.addstr('\n  ')
             return r
 
 
@@ -557,7 +560,7 @@ class ListBox(object):
 
         if not PY3 and isinstance(self.docstring, unicode):
             self.docstring = self.docstring.encode(getpreferredencoding(), 'ignore')
-        self.scr.addstr('\n' + self.docstring, app.get_colpair('comment'))
+        self.addstr('\n' + self.docstring, app.get_colpair('comment'))
         # XXX: After all the trouble I had with sizing the list box (I'm not very good
         # at that type of thing) I decided to do this bit of tidying up here just to
         # make sure there's no unnececessary blank lines, it makes things look nicer.
@@ -574,7 +577,7 @@ class ListBox(object):
         else:
             self.scr.mvwin(self.y - self.rows - 2, 0)
 
-        self.scr.addstr('\n ')
+        self.addstr('\n ')
 
         if not PY3:
             encoding = getpreferredencoding()
@@ -586,10 +589,10 @@ class ListBox(object):
                 color = app.get_colpair('main')
             if not PY3:
                 i = i.encode(encoding)
-            self.scr.addstr(i + padding, color)
+            self.addstr(i + padding, color)
             if ((self.cols == 1 or (ix and not (ix + 1) % self.cols))
                 and ix + 1 < len(self.v_items)):
-                self.scr.addstr('\n ')
+                self.addstr('\n ')
 
         h = self.scr.getyx()[0] + 2
         self.scr.resize(h, self.w)

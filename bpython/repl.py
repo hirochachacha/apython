@@ -249,11 +249,15 @@ class Repl(object):
     def current_word(self):
         """Return the current word, i.e. the (incomplete) word directly to the
         left of the cursor"""
-        # if self.cpos:
-            # return
-        # else:
         return self.parser.get_current_word()
 
+    @property
+    def is_first_word(self):
+        return self.parser.is_first_word()
+
+    @property
+    def is_assignment_statement(self):
+        return self.parser.is_assignment_statement()
 
     def get_object(self, name):
         return self.interp.get_object(name)
@@ -330,7 +334,7 @@ class Repl(object):
 
         e = False
         try:
-            if len(self.buffer) == 0 and len(WORD.findall(self.current_line)) == 1:
+            if len(self.buffer) == 0 and self.is_first_word:
                 self.completer.complete(current_word, with_command=True)
             else:
                 self.completer.complete(current_word)
@@ -489,7 +493,7 @@ class Repl(object):
 
         if len(self.buffer) == 1:
             line = self.buffer[0]
-            if self.interp.is_commandline(line):
+            if self.interp.is_commandline(line) and not self.is_assignment_statement:
                 result = self.interp.runcommand(line)
                 self.buffer = []
                 return result

@@ -26,11 +26,14 @@
 
 import rlcompleter
 import re
+import sys
 import keyword
 import inspect
 from bpython.completion.completers import import_completer
 from bpython.completion.completers import file_completer
 from bpython.completion import inspection
+from bpython.util import safe_eval, TimeOutException
+from bpython.util import debug
 from bpython._py3compat import PY3
 from six.moves import builtins
 from six import callable
@@ -110,19 +113,26 @@ class BPythonCompleter(rlcompleter.Completer):
         # Gna, Py 2.6's rlcompleter searches for __call__ inside the
         # instance instead of the type, so we monkeypatch to prevent
         # side-effects (__getattr__/__getattribute__)
-        m = re.match(r"(\w+(\.\w+)*)\.(\w*)", text)
-        if not m:
+        expr, _, attr = text.rpartition('.')
+        if not expr:
             return []
+        # m = re.match(r"(\w+(\.\w+)*)\.(\w*)", text)
+        # if not m:
+            # return []
 
-        expr, attr = m.group(1, 3)
+        # expr, attr = m.group(1, 3)
         if expr.isdigit():
             # Special case: float literal, using attrs here will result in
             # a SyntaxError
             return []
         try:
+            # obj = safe_eval(expr, self.locals)
             obj = eval(expr, self.locals)
+        except TimeOutException:
+            obj = sys.exc_info()[1]
         # except (NameError, SyntaxError):
         except Exception:
+            # debug(sys.exc_info()[1])
             return []
         else:
             with inspection.AttrCleaner(obj):
@@ -160,10 +170,7 @@ class BPythonCompleter(rlcompleter.Completer):
         """rlcompleter's _callable_postfix done right."""
         with inspection.AttrCleaner(value):
             if callable(value):
-                if not PY3:
-                    if word not in WITHOUT_CALLABLE_POSTFIX:
-                        word += '('
-                else:
+                if word not in WITHOUT_CALLABLE_POSTFIX:
                     word += '('
         return word
 

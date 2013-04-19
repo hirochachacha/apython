@@ -34,8 +34,7 @@ import keyword
 from pygments.token import Token
 from bpython.completion import inspection
 from bpython.completion.completers import import_completer
-from bpython.util import getpreferredencoding
-from bpython.parser import WORD
+from bpython.util import getpreferredencoding, safe_eval, TimeOutException
 from bpython._py3compat import PythonLexer, PY3
 from six import callable
 
@@ -235,19 +234,13 @@ class BPythonInterpreter(code.InteractiveInterpreter):
                     self.runsource(source)
 
     def get_object(self, name):
-        attributes = name.split('.')
         try:
-            obj = eval(attributes.pop(0), self.locals)
+            obj = safe_eval(name, self.locals)
+        except TimeOutException:
+            return sys.exc_info()[1]
         except Exception:
-        # except (SyntaxError, NameError, AttributeError, IndexError, KeyError, TypeError):
             return Nothing
         else:
-            while attributes:
-                with inspection.AttrCleaner(obj):
-                    try:
-                        obj = getattr(obj, attributes.pop(0))
-                    except AttributeError:
-                        return Nothing
             return obj
 
     def get_argspec(self, line, func, arg_number, cw):
@@ -258,7 +251,7 @@ class BPythonInterpreter(code.InteractiveInterpreter):
         if not spec:
             if keyword.iskeyword(line):
                 spec = inspection.KeySpec([line])
-            elif self.is_commandline(line) and len(WORD.findall(line)) == 1:
+            elif cw and self.is_commandline(line) and line.startswith(cw):
                 spec = self.get_command_spec(line)
                 spec = inspection.CommandSpec(spec)
             elif line.startswith('from ') or line.startswith('import '):
@@ -268,13 +261,16 @@ class BPythonInterpreter(code.InteractiveInterpreter):
                 else:
                     spec = None
             else:
-                obj = self.get_object(line)
-                if obj is not Nothing:
-                    spec = inspection.ObjSpec([line, obj])
-                elif cw:
-                    obj = self.get_object(cw)
+                if line:
+                    obj = self.get_object(line)
                     if obj is not Nothing:
-                        spec = inspection.ObjSpec([cw, obj])
+                        spec = inspection.ObjSpec([line, obj])
+                    elif cw:
+                        obj = self.get_object(cw)
+                        if obj is not Nothing:
+                            spec = inspection.ObjSpec([cw, obj])
+                        else:
+                            spec = None
                     else:
                         spec = None
                 else:

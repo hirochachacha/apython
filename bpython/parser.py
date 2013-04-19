@@ -25,8 +25,9 @@
 # THE SOFTWARE.
 #
 
-from itertools import takewhile
+import itertools
 import re
+import ast
 
 from bpython._py3compat import PythonLexer
 from bpython.formatter import Parenthesis
@@ -148,23 +149,45 @@ class ReplParser(object):
             return list()
         return line_tokens
 
+    def is_first_word(self):
+        line = self.s
+        if not line or self.cpos == len(line):
+            return False
+
+        if WORD.match(line[-1-self.cpos]):
+            pass
+        else:
+            return False
+
+        count = itertools.count(1)
+        i = 1
+        for i in count:
+            try:
+                if not WORD.match(line[-i-self.cpos]):
+                    return False
+            except IndexError:
+                return True
+
+    def is_assignment_statement(self):
+        try:
+            main_ast = ast.parse(self.s)
+            for node in ast.walk(main_ast):
+                if isinstance(node, ast.Assign):
+                    return True
+        except SyntaxError:
+            return False
+        return False
+
     def get_current_word(self):
         line = self.s
 
         if not line or self.cpos == len(line):
             return
 
-        if self.cpos:
-            if WORD.match(line[-1-self.cpos]):
-                pass
-            else:
-                return
+        if WORD.match(line[-1-self.cpos]):
+            pass
         else:
-            if WORD.match(line[-1-self.cpos]):
-                pass
-            else:
-                return
-
+            return
 
         l = len(line)
 
@@ -184,7 +207,7 @@ class ReplParser(object):
 
     def get_current_string(self):
         tokens = self.tokenize(self.s)
-        string_tokens = list(takewhile(self._token_is_any_of([Token.String,
+        string_tokens = list(itertools.takewhile(self._token_is_any_of([Token.String,
                                                         Token.Text]),
                                        reversed(tokens)))
         if not string_tokens:
