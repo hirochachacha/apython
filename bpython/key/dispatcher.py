@@ -212,6 +212,9 @@ class Dispatcher(object):
     @dispatch_table.set_handler_on_clirepl('C-x')
     def debug(self):
         from bpython.util import debug
+        # from bpython import str_util
+        # debug(self.owner.current_string)
+        # debug(str_util.get_rsbracket(self.owner.s))
         debug(str(self.owner.current_word)
                 + ':'
                 + str(self.owner.current_line)

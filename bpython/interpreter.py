@@ -34,63 +34,19 @@ import keyword
 from pygments.token import Token
 from bpython.completion import inspection
 from bpython.completion.completers import import_completer
-from bpython.util import getpreferredencoding, safe_eval, TimeOutException
+from bpython.util import getpreferredencoding, safe_eval, TimeOutException, debug, isolate
+from bpython.str_util import get_closure_words
 from bpython._py3compat import PythonLexer, PY3
 from six import callable
 
 
 class NothingType: pass
 
+
 Nothing = NothingType()
 
-#TODO more precise one
-def command_tokenize(line):
-    result = ['']
-    in_quote = False
-    quote_type = None
-    for c in line:
-        if c == ' ':
-            if not in_quote:
-                if result[-1] == '':
-                    pass
-                else:
-                    result.append('')
-            else:
-                result[-1] += c
-        elif c in ['"', "'"]:
-            if not in_quote:
-                in_quote = True
-                quote_type = c
-                result[-1] += c
-            else:
-                if c == quote_type:
-                    in_quote = False
-                    quote_type = None
-                    result[-1] += c
-                else:
-                    result[-1] += c
-        elif c == "(":
-            if not in_quote:
-                in_quote = True
-                quote_type = c
-                result[-1] += c
-            else:
-                result[-1] += c
-        elif c == ")":
-            if not in_quote:
-                in_quote = True
-                quote_type = c
-                result[-1] += c
-            else:
-                if quote_type == "(":
-                    in_quote = False
-                    quote_type = None
-                    result[-1] += c
-                else:
-                    result[-1] += c
-        else:
-            result[-1] += c
-    return result
+
+command_tokenize = lambda s: get_closure_words(s.strip(' '))
 
 
 class BPythonInterpreter(code.InteractiveInterpreter):
@@ -243,7 +199,17 @@ class BPythonInterpreter(code.InteractiveInterpreter):
         else:
             return obj
 
-    def get_argspec(self, line, func, arg_number, cw):
+    def get_raw_object(self, name):
+        try:
+            obj = eval(name, self.locals)
+        except Exception:
+            return Nothing
+        else:
+            return obj
+
+    def get_argspec(self, repl, func, arg_number):
+        line = repl.s
+        cw = repl.current_word
         if func:
             spec = self._get_argspec(func, arg_number)
         else:
@@ -251,7 +217,7 @@ class BPythonInterpreter(code.InteractiveInterpreter):
         if not spec:
             if keyword.iskeyword(line):
                 spec = inspection.KeySpec([line])
-            elif cw and self.is_commandline(line) and line.startswith(cw):
+            elif self.is_commandline(line) and repl.is_first_word:
                 spec = self.get_command_spec(line)
                 spec = inspection.CommandSpec(spec)
             elif line.startswith('from ') or line.startswith('import '):
@@ -293,7 +259,7 @@ class BPythonInterpreter(code.InteractiveInterpreter):
                                 break
                             else:
                                 pass
-                    except:
+                    except Exception:
                         spec.docstring = None
                     finally:
                         spec[-1] = None
@@ -308,7 +274,8 @@ class BPythonInterpreter(code.InteractiveInterpreter):
         # Get the name of the current function and where we are in
         # the arguments
 
-        f = self.get_object(func)
+        # f = self.get_old_object(func)
+        f = self.get_raw_object(func)
         if f is Nothing:
             return None
 

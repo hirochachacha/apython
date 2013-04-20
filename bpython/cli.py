@@ -1170,6 +1170,7 @@ class CLIRepl(repl.Repl, Editable):
         self.interp.writetb = self.writetb
         self.exit_value = ()
         self.f_string = ''
+        self.skip_completion = False
         self.in_hist = False
         self.in_search_mode = None
         self.rl_indices = []
@@ -1208,7 +1209,9 @@ class CLIRepl(repl.Repl, Editable):
         return result
 
     def backward_kill_word(self):
+        self.skip_completion = True
         Editable.backward_kill_word(self)
+        self.skip_completion = False
         self.complete()
 
     def backward_kill_line(self):
@@ -1238,6 +1241,8 @@ class CLIRepl(repl.Repl, Editable):
 
     def complete(self, tab=False):
         """Get Autcomplete list and window."""
+        if self.skip_completion:
+            return
         if self.in_search_mode == "search":
             self.search_history()
         elif self.in_search_mode == "reverse":

@@ -38,10 +38,8 @@ from bpython.completion.completer import BPythonCompleter
 from bpython.parser import ReplParser
 from bpython.history import History
 
-from bpython.util import getpreferredencoding
+from bpython.util import getpreferredencoding, debug
 from bpython._py3compat import PythonLexer, PY3
-
-from bpython.parser import WORD
 
 
 if PY3:
@@ -271,7 +269,7 @@ class Repl(object):
             self.argspec = None
         else:
             func, arg_number = self.parser.get_current_func()
-            self.argspec = self.interp.get_argspec(self.s, func, arg_number, self.current_word)
+            self.argspec = self.interp.get_argspec(self, func, arg_number)
 
     @property
     def current_object(self):
@@ -294,26 +292,44 @@ class Repl(object):
 
         current_word = self.current_word
         current_string = self.current_string
-
         line = self.current_line.lstrip()
+        # from bpython import str_util
+        # sb_name, sb_val = str_util.get_rsbracket(self.s)
+        # if sb_name:
+            # sb_obj = self.get_object(sb_name)
+            # completer = self.completer
+            # attr = sb_val
+            # n = len(attr)
+            # try:
+                # if hasattr(sb_obj, 'keys'):
+                    # words = getattr(sb_obj, 'keys')()
+                    # self.matches = sorted(word for word in words if completer._method_match(word, n, attr))
+                # else:
+                    # words = list(range(len(sb_obj)))
+                    # self.matches = sorted(word for word in words if completer._method_match(word, n, attr))
+            # except (TypeError, AttributeError):
+                # self.matches = []
+            # self.matches_iter.force_update(self.matches)
+            # return bool(self.matches)
         if not current_word:
             self.matches = []
             self.matches_iter.update()
             return bool(self.argspec)
         elif not (current_word or current_string):
             return bool(self.argspec)
-        elif current_string and tab:
-            # Filename completion
-            self.completer.file_complete(current_string)
-            self.matches = self.completer.matches
-            self.matches_iter.update(current_string, self.matches)
-            return bool(self.matches)
         elif current_string:
-            # Do not provide suggestions inside strings, as one cannot tab
-            # them so they would be really confusing.
-            self.matches = []
-            self.matches_iter.update()
-            return False
+            if tab:
+                # Filename completion
+                self.completer.file_complete(current_string)
+                self.matches = self.completer.matches
+                self.matches_iter.update(current_string, self.matches)
+                return bool(self.matches)
+            else:
+                # Do not provide suggestions inside strings, as one cannot tab
+                # them so they would be really confusing.
+                self.matches = []
+                self.matches_iter.update()
+                return False
         elif (self.config.complete_magic_methods
                 and self.buffer
                 and self.buffer[0].startswith("class ")

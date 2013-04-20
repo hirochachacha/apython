@@ -33,7 +33,7 @@ from bpython.completion.completers import import_completer
 from bpython.completion.completers import file_completer
 from bpython.completion import inspection
 from bpython.util import safe_eval, TimeOutException
-from bpython.util import debug
+from bpython.util import debug, isolate
 from bpython._py3compat import PY3
 from six.moves import builtins
 from six import callable
@@ -106,6 +106,7 @@ class BPythonCompleter(rlcompleter.Completer):
                     words.add(self._callable_postfix(val, word))
         return sorted(self._private_filter(text, words))
 
+    @isolate
     def attr_matches(self, text):
         """Taken from rlcompleter.py and bent to my will.
         """
@@ -128,8 +129,8 @@ class BPythonCompleter(rlcompleter.Completer):
         try:
             # obj = safe_eval(expr, self.locals)
             obj = eval(expr, self.locals)
-        except TimeOutException:
-            obj = sys.exc_info()[1]
+        # except TimeOutException:
+            # obj = sys.exc_info()[1]
         # except (NameError, SyntaxError):
         except Exception:
             # debug(sys.exc_info()[1])

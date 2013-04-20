@@ -27,17 +27,13 @@
 
 import itertools
 import re
-import ast
 
 from bpython._py3compat import PythonLexer
 from bpython.formatter import Parenthesis
+from bpython import str_util
 from pygments.token import Token
-from bpython._py3compat import PythonLexer
 
 from six.moves import xrange
-
-
-WORD = re.compile(r'([\w\\.])+')
 
 
 class ReplParser(object):
@@ -149,61 +145,24 @@ class ReplParser(object):
             return list()
         return line_tokens
 
+
     def is_first_word(self):
-        line = self.s
-        if not line or self.cpos == len(line):
-            return False
-
-        if WORD.match(line[-1-self.cpos]):
-            pass
-        else:
-            return False
-
-        count = itertools.count(1)
-        i = 1
-        for i in count:
-            try:
-                if not WORD.match(line[-i-self.cpos]):
-                    return False
-            except IndexError:
-                return True
+        line = self.get_current_left_line()
+        return str_util.is_only_word(line)
 
     def is_assignment_statement(self):
-        try:
-            main_ast = ast.parse(self.s)
-            for node in ast.walk(main_ast):
-                if isinstance(node, ast.Assign):
-                    return True
-        except SyntaxError:
-            return False
-        return False
+        return str_util.is_assignment_statement(self.s)
+
+    def get_current_left_line(self):
+        if self.cpos:
+            line = self.s[:-self.cpos]
+        else:
+            line = self.s
+        return line
 
     def get_current_word(self):
-        line = self.s
-
-        if not line or self.cpos == len(line):
-            return
-
-        if WORD.match(line[-1-self.cpos]):
-            pass
-        else:
-            return
-
-        l = len(line)
-
-        i = 1
-        for i in xrange(1, l + 1):
-            try:
-                if not WORD.match(line[-i-self.cpos]):
-                    i -= 1
-                    break
-            except IndexError:
-                break
-
-        if self.cpos:
-            return line[-i-self.cpos:-self.cpos]
-        else:
-            return line[-i:]
+        line = self.get_current_left_line()
+        return str_util.get_rclosure_word(line)
 
     def get_current_string(self):
         tokens = self.tokenize(self.s)
@@ -233,47 +192,11 @@ class ReplParser(object):
         return ''.join(string)
 
     def get_current_func(self):
-        stack = [['', 0, '']]
-        try:
-            for (token, value) in PythonLexer().get_tokens(self.s):
-                if token is Token.Punctuation:
-                    if value in '([{':
-                        stack.append(['', 0, value])
-                    elif value in ')]}':
-                        stack.pop()
-                    elif value == ',':
-                        try:
-                            stack[-1][1] += 1
-                        except TypeError:
-                            stack[-1][1] = ''
-                        stack[-1][0] = ''
-                    elif value == ':' and stack[-1][2] == 'lambda':
-                        stack.pop()
-                    else:
-                        stack[-1][0] = ''
-                elif (token is Token.Name or token in Token.Name.subtypes or
-                                  token is Token.Operator and value == '.'):
-                    stack[-1][0] += value
-                elif token is Token.Operator and value == '=':
-                    stack[-1][1] = stack[-1][0]
-                    stack[-1][0] = ''
-                elif token is Token.Keyword and value == 'lambda':
-                    stack.append(['', 0, value])
-                    # elif token is Token.Text and value == ' ':
-                    # pass
-                else:
-                    stack[-1][0] = ''
-            while stack[-1][2] in '[{':
-                stack.pop()
-            _, arg_number, _ = stack.pop()
-            func, _, _ = stack.pop()
-        except IndexError:
-            return [None, 0]
-        if not func:
-            return [None, 0]
+        func, args = str_util.get_rfunc(self.s)
+        if args:
+            return func, len(args) - 1
         else:
-            return [func, arg_number]
-
+            return func, 0
 
     def _split_lines(self, tokens):
         for (token, value) in tokens:
@@ -308,3 +231,5 @@ class ReplParser(object):
             return any(check(token) for check in is_token_types)
 
         return __token_is_any_of
+
+
