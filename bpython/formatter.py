@@ -53,8 +53,10 @@ from pygments.token import Keyword, Name, Comment, String, Error, \
 """
 
 Parenthesis = Token.Punctuation.Parenthesis
+Command = Token.Command
 
 theme_map = {
+    Command: 'command',
     Keyword: 'keyword',
     Name: 'name',
     Comment: 'comment',

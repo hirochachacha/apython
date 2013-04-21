@@ -67,7 +67,14 @@ class ReplParser(object):
         if self.cpos:
             cursor += 1
         stack = list()
-        all_tokens = list(PythonLexer().get_tokens(source))
+        if len(self.buffer) == 0 and self.repl.interp.is_commandline(s):
+            lines = s.split(' ')
+            ftoken = lines[0]
+            source = source[len(ftoken):]
+            all_tokens = [(Token.Command, ftoken)]
+            all_tokens += list(PythonLexer().get_tokens(source))
+        else:
+            all_tokens = list(PythonLexer().get_tokens(source))
         # Unfortunately, Pygments adds a trailing newline and strings with
         # no size, so strip them
         while not all_tokens[-1][1]:
@@ -145,9 +152,12 @@ class ReplParser(object):
             return list()
         return line_tokens
 
-
     def is_first_word(self):
         line = self.get_current_left_line()
+        return str_util.is_only_word(line)
+
+    def is_only_word(self):
+        line = self.get_current_left_line().rstrip()
         return str_util.is_only_word(line)
 
     def is_assignment_statement(self):

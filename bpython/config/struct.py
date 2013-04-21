@@ -94,6 +94,7 @@ def _loadini(struct, configfile):
     struct.editor = config.get('general', 'editor')
     struct.word_delimiter = config.get('general', 'word_delimiter')
     struct.is_space_only_skip_char = config.get('general', 'is_space_only_skip_char')
+    struct.statusbar_text = config.get('general', 'statusbar_text')
     color_scheme_name = config.get('general', 'color_scheme')
 
     if color_scheme_name == 'default':
@@ -109,14 +110,10 @@ def _populate_color_scheme(struct, color_scheme_name):
         struct.color_scheme = dict()
 
         theme_filename = color_scheme_name + '.theme'
-        path = os.path.expanduser(os.path.join(get_config_home(),
-                                               theme_filename))
-        old_path = os.path.expanduser(os.path.join('~/.bpython',
-                                                   theme_filename))
-        default_path = os.path.join(
-            os.path.dirname(__file__), "default", theme_filename)
+        path = os.path.expanduser(os.path.join('~/.bpython', 'themes', theme_filename))
+        default_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "default", "themes", theme_filename)
 
-        for path in [path, old_path, default_path]:
+        for path in [path, default_path]:
             try:
                 _load_theme(path, struct.color_scheme)
             except EnvironmentError:

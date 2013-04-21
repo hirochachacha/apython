@@ -254,6 +254,10 @@ class Repl(object):
         return self.parser.is_first_word()
 
     @property
+    def is_only_word(self):
+        return self.parser.is_only_word()
+
+    @property
     def is_assignment_statement(self):
         return self.parser.is_assignment_statement()
 

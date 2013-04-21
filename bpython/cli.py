@@ -85,7 +85,7 @@ from bpython import repl
 from bpython.util import getpreferredencoding, debug, Dummy
 import bpython.config.args
 
-from bpython.interpreter import BPythonInterpreter
+from bpython.interpreter import BPythonInterpreter, command_tokenize
 
 from bpython._py3compat import PythonLexer, PY3, chr
 from six.moves import map, xrange
@@ -456,7 +456,7 @@ class ListBox(object):
             self.addstr('\n  ')
             self.addstr(name, app.get_colpair('name') | curses.A_BOLD)
             self.addstr(': ', app.get_colpair('name'))
-            self.addstr('command', app.get_colpair('name'))
+            self.addstr('command', app.get_colpair('command'))
             return r
 
         elif isinstance(self.topline, inspection.KeySpec):
@@ -467,7 +467,7 @@ class ListBox(object):
             self.addstr('\n  ')
             self.addstr(name, app.get_colpair('name') | curses.A_BOLD)
             self.addstr(': ', app.get_colpair('name'))
-            self.addstr('keyword', app.get_colpair('name'))
+            self.addstr('keyword', app.get_colpair('keyword'))
             self.docstring = ""
             return r
 
@@ -947,6 +947,11 @@ class Editable(object):
 
         self.scr.move(real_lineno,
                       len(self.ps1) if lineno == 0 else len(self.ps2))
+        # if self.interp.is_commandline(line):
+            # tokens = command_tokenize(line)
+            # command = tokens[0]
+            # line = ' '.join(token[1:])
+        # else:
         line = format(tokens, BPythonFormatter(self.config.color_scheme))
         for string in line.split('\x04'):
             self.echo(string)
@@ -1734,13 +1739,10 @@ class Statusbar(Editable):
         self.size()
 
         self.s = ''
+        self._s = config.statusbar_text
         self.c = color
         self.timer = 0
         self.settext(self._s, color)
-
-    @property
-    def _s(self):
-        return " <C-r> Rewind  <C-s> Save  <F8> Pastebin <F9> Pager  <F2> Show Source "
 
     def size(self):
         """Set instance attributes for x and y top left corner coordinates

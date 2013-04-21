@@ -217,7 +217,7 @@ class BPythonInterpreter(code.InteractiveInterpreter):
         if not spec:
             if keyword.iskeyword(line):
                 spec = inspection.KeySpec([line])
-            elif self.is_commandline(line) and repl.is_first_word:
+            elif self.is_commandline(line) and repl.is_only_word:
                 spec = self.get_command_spec(line)
                 spec = inspection.CommandSpec(spec)
             elif line.startswith('from ') or line.startswith('import '):
