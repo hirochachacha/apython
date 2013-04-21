@@ -214,14 +214,15 @@ class Dispatcher(object):
         from bpython.util import debug
         # from bpython import str_util
         # debug(self.owner.current_string)
-        # debug(str_util.get_rsbracket(self.owner.s))
-        debug(str(self.owner.current_word)
-                + ':'
-                + str(self.owner.current_line)
-                + ':'
-                + str(self.owner.argspec.__class__)
-                + ':'
-                + str(self.owner.matches))
+        # debug(self.owner.get_current_sbracket())
+        debug(self.owner.matches_iter.index)
+        # debug(str(self.owner.current_word)
+                # + ':'
+                # + str(self.owner.current_line)
+                # + ':'
+                # + str(self.owner.argspec.__class__)
+                # + ':'
+                # + str(self.owner.matches))
         return ''
 
     @dispatch_table.set_handler_on_clirepl('M-. M-_')

@@ -73,6 +73,9 @@ class MatchesIterator(object):
     def wait(self):
         self.is_wait = True
 
+    def reset(self):
+        self.index = -1
+
     def next(self):
         if self.is_wait:
             self.is_wait = False
@@ -94,11 +97,6 @@ class MatchesIterator(object):
             self.current_word = current_word
             self.matches = list(matches)
             self.index = -1
-
-    def force_update(self, matches):
-        self.matches = list(matches)
-        self.current_word = ''
-        self.index = -1
 
 
 class Interaction(object):
@@ -249,6 +247,10 @@ class Repl(object):
         left of the cursor"""
         return self.parser.get_current_word()
 
+    def get_current_sbracket(self):
+        return self.parser.get_current_sbracket()
+
+
     @property
     def is_first_word(self):
         return self.parser.is_first_word()
@@ -296,26 +298,14 @@ class Repl(object):
 
         current_word = self.current_word
         current_string = self.current_string
+        sb_expr, sb_attr = self.get_current_sbracket()
         line = self.current_line.lstrip()
-        # from bpython import str_util
-        # sb_name, sb_val = str_util.get_rsbracket(self.s)
-        # if sb_name:
-            # sb_obj = self.get_object(sb_name)
-            # completer = self.completer
-            # attr = sb_val
-            # n = len(attr)
-            # try:
-                # if hasattr(sb_obj, 'keys'):
-                    # words = getattr(sb_obj, 'keys')()
-                    # self.matches = sorted(word for word in words if completer._method_match(word, n, attr))
-                # else:
-                    # words = list(range(len(sb_obj)))
-                    # self.matches = sorted(word for word in words if completer._method_match(word, n, attr))
-            # except (TypeError, AttributeError):
-                # self.matches = []
-            # self.matches_iter.force_update(self.matches)
-            # return bool(self.matches)
-        if not current_word:
+        if sb_expr:
+            self.completer.get_item_complete(sb_expr, sb_attr)
+            self.matches = self.completer.matches
+            self.matches_iter.update(sb_attr, self.matches)
+            return bool(self.matches)
+        elif not current_word:
             self.matches = []
             self.matches_iter.update()
             return bool(self.argspec)
@@ -490,6 +480,10 @@ class Repl(object):
     def push(self, s, insert_into_history=True):
         """Push a line of code onto the buffer so it can process it all
         at once when a code block ends"""
+        if s and s.lstrip(' ')[0] == '!':
+            self.buffer = []
+            return
+
         s = s.rstrip('\n')
         self.buffer.append(s)
 

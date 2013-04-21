@@ -27,33 +27,23 @@
 import rlcompleter
 import re
 import sys
-import keyword
 import inspect
-from bpython.completion.completers import import_completer
-from bpython.completion.completers import file_completer
+from bpython.completion import keyword
+from bpython.completion.completers import import_completer, file_completer, get_item_completer
 from bpython.completion import inspection
-from bpython.util import safe_eval, TimeOutException
-from bpython.util import debug, isolate
+from bpython.util import safe_eval, TimeOutException, isolate, debug
 from bpython._py3compat import PY3
 from six.moves import builtins
 from six import callable
 
+import abc
 
-# Needed for special handling of __abstractmethods__
-# abc only exists since 2.6, so check both that it exists and that it's
-# the one we're expecting
-try:
-    import abc
-
-    abc.ABCMeta
-    has_abc = True
-except (ImportError, AttributeError):
-    has_abc = False
 
 # Autocomplete modes
 SIMPLE = 'simple'
 SUBSTRING = 'substring'
 FUZZY = 'fuzzy'
+
 
 WITHOUT_CALLABLE_POSTFIX = set(['basestring'])
 
@@ -71,6 +61,9 @@ class BPythonCompleter(rlcompleter.Completer):
     def file_complete(self, text):
         self.matches = file_completer.complete(text)
 
+    def get_item_complete(self, expr, attr):
+        self.matches = get_item_completer.complete(expr, attr, self.locals)
+
     def import_complete(self, text, line):
         self.matches = import_completer.complete(text, line)
 
@@ -80,7 +73,6 @@ class BPythonCompleter(rlcompleter.Completer):
             return rlcompleter.Completer.complete(self, text, 0)
         finally:
             self.with_command = False
-
 
     def register_command(self, word):
         self.commands.append(word)
@@ -117,23 +109,14 @@ class BPythonCompleter(rlcompleter.Completer):
         expr, _, attr = text.rpartition('.')
         if not expr:
             return []
-        # m = re.match(r"(\w+(\.\w+)*)\.(\w*)", text)
-        # if not m:
-            # return []
 
-        # expr, attr = m.group(1, 3)
         if expr.isdigit():
             # Special case: float literal, using attrs here will result in
             # a SyntaxError
             return []
         try:
-            # obj = safe_eval(expr, self.locals)
             obj = eval(expr, self.locals)
-        # except TimeOutException:
-            # obj = sys.exc_info()[1]
-        # except (NameError, SyntaxError):
         except Exception:
-            # debug(sys.exc_info()[1])
             return []
         else:
             with inspection.AttrCleaner(obj):
@@ -154,7 +137,7 @@ class BPythonCompleter(rlcompleter.Completer):
             for k, v in inspect.getmembers(obj.__class__):
                 words.add(self._callable_postfix(v, k))
 
-        if hasattr(obj, '__class__') and has_abc and not isinstance(obj.__class__, abc.ABCMeta):
+        if hasattr(obj, '__class__') and not isinstance(obj.__class__, abc.ABCMeta):
             try:
                 words.remove('__abstractmethods__')
             except KeyError:
@@ -170,8 +153,8 @@ class BPythonCompleter(rlcompleter.Completer):
     def _callable_postfix(self, value, word):
         """rlcompleter's _callable_postfix done right."""
         with inspection.AttrCleaner(value):
-            if callable(value):
-                if word not in WITHOUT_CALLABLE_POSTFIX:
+            if callable(value) and not isinstance(value, abc.ABCMeta):
+                if not word in WITHOUT_CALLABLE_POSTFIX:
                     word += '('
         return word
 

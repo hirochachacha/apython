@@ -947,11 +947,6 @@ class Editable(object):
 
         self.scr.move(real_lineno,
                       len(self.ps1) if lineno == 0 else len(self.ps2))
-        # if self.interp.is_commandline(line):
-            # tokens = command_tokenize(line)
-            # command = tokens[0]
-            # line = ' '.join(token[1:])
-        # else:
         line = format(tokens, BPythonFormatter(self.config.color_scheme))
         for string in line.split('\x04'):
             self.echo(string)
@@ -1199,6 +1194,7 @@ class CLIRepl(repl.Repl, Editable):
         """Add a string to the current input line and figure out
         where it should go, depending on the cursor position."""
         Editable.addstr(self, s)
+        self.matches_iter.reset()
         self.complete()
 
     def accept_line(self):
@@ -1210,6 +1206,7 @@ class CLIRepl(repl.Repl, Editable):
     def backward_delete_character(self, delete_tabs=True):
         """Process a backspace"""
         result = Editable.backward_delete_character(self, delete_tabs=delete_tabs)
+        self.matches_iter.reset()
         self.complete()
         return result
 
@@ -1328,7 +1325,7 @@ class CLIRepl(repl.Repl, Editable):
             self.matches.append(m)
             self.rl_indices.append(i)
         self.rl_history.index = index
-        self.matches_iter.force_update(self.matches)
+        self.matches_iter.update(self.s, self.matches)
 
         if self.s and len(self.matches) > 0:
             self.print_line(self.s, clr=True)
@@ -1358,7 +1355,7 @@ class CLIRepl(repl.Repl, Editable):
             self.matches.append(m)
             self.rl_indices.append(i)
         self.rl_history.index = index
-        self.matches_iter.force_update(self.matches)
+        self.matches_iter.update(self.s, self.matches)
 
         if self.s and len(self.matches) > 0:
             self.print_line(self.s, clr=True)
@@ -1619,12 +1616,17 @@ class CLIRepl(repl.Repl, Editable):
             if not self.config.auto_display_list and not self.list_win_visible:
                 return True
 
-            current_word = self.current_string or self.current_word
+            sb_expr, sb_attr = self.get_current_sbracket()
+            if sb_expr:
+                current_word = sb_attr
+            else:
+                current_word = self.current_string or self.current_word
 
             if not current_word:
                 return True
         else:
             current_word = self.matches_iter.current_word
+            # current_word = self.matches_iter.current()
 
         # 3. check to see if we can expand the current word
         cseq = None

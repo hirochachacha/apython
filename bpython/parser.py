@@ -174,6 +174,9 @@ class ReplParser(object):
         line = self.get_current_left_line()
         return str_util.get_rclosure_word(line)
 
+    def get_current_sbracket(self):
+        return str_util.get_rsbracket(self.s)
+
     def get_current_string(self):
         tokens = self.tokenize(self.s)
         string_tokens = list(itertools.takewhile(self._token_is_any_of([Token.String,

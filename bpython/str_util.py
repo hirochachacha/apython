@@ -3,6 +3,7 @@
 
 import re
 import ast
+from six.moves import xrange
 
 
 WORD = re.compile(r'([\w\\.\-\\%])+')
@@ -172,10 +173,17 @@ def get_rfunc(line):
 
 
 def get_rsbracket(line):
-    line = line + ']'
+    is_close = False
+    if line and line[-1] == ']':
+        is_close = True
+    else:
+        line = line + ']'
     closure = get_rclosure(line, ignore_quote=True)
     if closure:
-        return get_rclosure_word(line[:-len(closure)]), closure[1:-1]
+        if is_close:
+            return get_rclosure_word(line[:-len(closure)]), closure[1:]
+        else:
+            return get_rclosure_word(line[:-len(closure)]), closure[1:-1]
     else:
         return None, None
 
