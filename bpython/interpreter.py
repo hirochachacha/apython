@@ -192,8 +192,8 @@ class BPythonInterpreter(code.InteractiveInterpreter):
     def get_object(self, name):
         try:
             obj = safe_eval(name, self.locals)
-        except TimeOutException:
-            return sys.exc_info()[1]
+        except TimeOutException as e:
+            return e
         except Exception:
             return Nothing
         else:

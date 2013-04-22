@@ -65,8 +65,7 @@ def isolate(func):
         try:
             data = _dumps(func(*args[1], **kwargs))
             in_.send_bytes(data)
-        except Exception:
-            e = sys.exc_info()[1]
+        except Exception as e:
             e = _dumps(e)
             in_.send_bytes(e)
         finally:

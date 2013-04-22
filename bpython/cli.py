@@ -1397,8 +1397,7 @@ class CLIRepl(repl.Repl, Editable):
         curses.raw(False)
         try:
             return repl.Repl.push(self, s, insert_into_history)
-        except SystemExit:
-            e = sys.exc_info()[1]
+        except SystemExit as e:
             # Avoid a traceback on e.g. quit()
             self.do_exit = True
             self.exit_value = e.args
@@ -2089,8 +2088,7 @@ class App(object):
             exit_value = 0
             try:
                 bpython.config.args.exec_code(self.interpreter, args)
-            except SystemExit:
-                e = sys.exc_info()[1]
+            except SystemExit as e:
                 # The documentation of code.InteractiveInterpreter.runcode claims
                 # that it reraises SystemExit. However, I can't manage to trigger
                 # that. To be one the safe side let's catch SystemExit here anyway.

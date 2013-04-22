@@ -350,8 +350,7 @@ class Repl(object):
                 self.completer.complete(current_word)
         except (AttributeError, re.error):
             e = True
-        except Exception:
-            err = sys.exc_info()[1]
+        except Exception as err:
             raise err
             # This sucks, but it's either that or list all the exceptions that could
             # possibly be raised here, so if anyone wants to do that, feel free to send me
@@ -497,8 +496,7 @@ class Repl(object):
                 self.rl_history.append(s)
                 try:
                     self.rl_history.save(histfilename, getpreferredencoding(), self.config.hist_length)
-                except EnvironmentError:
-                    e = sys.exc_info()[1]
+                except EnvironmentError as e:
                     self.interact.notify("Error occured while writing to file %s (%s) " % (histfilename, e.strerror))
                     self.rl_history.entries = oldhistory
                     self.rl_history.append(s)
