@@ -237,6 +237,10 @@ class Repl(object):
         return str(self.stdout_history)
 
     @property
+    def stdin(self):
+        return str(self.stdin_history)
+
+    @property
     def current_string(self):
         """If the line ends in a string get it, otherwise return ''"""
         return self.parser.get_current_string()
@@ -479,7 +483,7 @@ class Repl(object):
     def push(self, s, insert_into_history=True):
         """Push a line of code onto the buffer so it can process it all
         at once when a code block ends"""
-        if s and s.lstrip(' ')[0] == '!':
+        if s.lstrip(' ') and s.lstrip(' ')[0] == '!':
             self.buffer = []
             return
 

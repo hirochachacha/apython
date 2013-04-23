@@ -43,9 +43,8 @@ def edit_output_history():
 
 def edit_input_history():
     with tempfile.NamedTemporaryFile() as f:
-        entries = bpython.running.clirepl.stdin_history.entries
-        output = pprint.pformat(entries)
-        f.write(output.encode(getpreferredencoding()))
+        input = bpython.running.stdin
+        f.write(input.encode(getpreferredencoding()))
         f.flush()
         editor_invocation = invoke_editor(f.name, 0, False).split()
         invoke_command(editor_invocation)

@@ -45,7 +45,7 @@ SUBSTRING = 'substring'
 FUZZY = 'fuzzy'
 
 
-WITHOUT_CALLABLE_POSTFIX = set(['basestring'])
+WITHOUT_CALLABLE_POSTFIX = set(['basestring', 'property', 'classmethod', 'staticmethod'])
 
 
 class BPythonCompleter(rlcompleter.Completer):

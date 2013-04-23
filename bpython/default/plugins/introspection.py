@@ -38,3 +38,11 @@ def page(data):
 def show_source(obj):
     source = inspect.getsource(obj)
     page(source)
+
+def show_input():
+    input = bpython.running.stdin
+    page(input)
+
+def show_output():
+    output = bpython.running.stdout
+    page(output)

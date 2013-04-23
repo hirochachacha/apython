@@ -27,12 +27,14 @@ def register_keys():
 
 def register_command():
     from plugins.editing import (edit_object, edit_output, edit_output_history)
-    from plugins.introspection import (show_source, page)
+    from plugins.introspection import (show_source, page, show_input, show_output)
 
     bpython.running.register_command('%edit-object', edit_object)
-    bpython.running.register_command('%edit-output', edit_output)
-    bpython.running.register_command('%edit-output-history', edit_output_history)
+    # bpython.running.register_command('%edit-output', edit_output)
+    # bpython.running.register_command('%edit-output-history', edit_output_history)
     bpython.running.register_command('%show-source', show_source)
+    bpython.running.register_command('%show-input', show_input)
+    bpython.running.register_command('%show-output', show_output)
     bpython.running.register_command('%page', page)
 
     @bpython.running.register_command('p', without_completion=True)

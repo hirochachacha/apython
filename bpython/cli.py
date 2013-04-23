@@ -2079,6 +2079,10 @@ class App(object):
     def stdout(self):
         return self.clirepl.stdout
 
+    @property
+    def stdin(self):
+        return self.clirepl.stdin
+
     def refresh(self):
         self.clirepl.scr.refresh()
         self.statusbar.refresh()
