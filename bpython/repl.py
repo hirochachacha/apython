@@ -38,7 +38,7 @@ from bpython.completion.completer import BPythonCompleter
 from bpython.parser import ReplParser
 from bpython.history import History
 
-from bpython.util import getpreferredencoding, debug
+from bpython.util import getpreferredencoding, debug, TimeOutException
 from bpython._py3compat import PythonLexer, PY3
 
 
@@ -352,7 +352,7 @@ class Repl(object):
                 self.completer.complete(current_word, with_command=True)
             else:
                 self.completer.complete(current_word)
-        except (AttributeError, re.error):
+        except (AttributeError, re.error, TimeOutException):
             e = True
         except Exception as err:
             raise err
