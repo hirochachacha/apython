@@ -261,6 +261,23 @@ def getargspec(func, f):
     return argspec
 
 
+def getmembers(object, predicate=None):
+    """Return all members of an object as (name, value) pairs sorted by name.
+    Optionally, only return members that satisfy a given predicate."""
+    results = []
+    for key in dir(object):
+        try:
+            value = getattr(object, key)
+        except AttributeError:
+            continue
+        except:
+            value = None
+        if not predicate or predicate(value):
+            results.append((key, value))
+    results.sort()
+    return results
+
+
 def is_eval_safe_name(string):
     if PY3:
         return all(part.isidentifier() and not keyword.iskeyword(part)

@@ -27,7 +27,6 @@
 import rlcompleter
 import re
 import sys
-import inspect
 from bpython.completion import keyword
 from bpython.completion.completers import import_completer, file_completer, get_item_completer
 from bpython.completion import inspection
@@ -95,7 +94,8 @@ class BPythonCompleter(rlcompleter.Completer):
         for nspace in [builtins.__dict__, self.locals]:
             for word, val in nspace.items():
                 if self._method_match(word, len(text), text) and word != "__builtins__":
-                    words.add(self._callable_postfix(val, word))
+                    with inspection.AttrCleaner(val):
+                        words.add(self._callable_postfix(val, word))
         return sorted(self._private_filter(text, words))
 
     @isolate
@@ -129,12 +129,12 @@ class BPythonCompleter(rlcompleter.Completer):
         restore the original __getattribute__ method."""
 
         words = set()
-        for k, v in inspect.getmembers(obj):
+        for k, v in inspection.getmembers(obj):
             words.add(self._callable_postfix(v, k))
 
         if hasattr(obj, '__class__'):
             words.add('__class__')
-            for k, v in inspect.getmembers(obj.__class__):
+            for k, v in inspection.getmembers(obj.__class__):
                 words.add(self._callable_postfix(v, k))
 
         if hasattr(obj, '__class__') and not isinstance(obj.__class__, abc.ABCMeta):
@@ -152,10 +152,9 @@ class BPythonCompleter(rlcompleter.Completer):
 
     def _callable_postfix(self, value, word):
         """rlcompleter's _callable_postfix done right."""
-        with inspection.AttrCleaner(value):
-            if callable(value) and not isinstance(value, abc.ABCMeta):
-                if not word in WITHOUT_CALLABLE_POSTFIX:
-                    word += '('
+        if callable(value) and not isinstance(value, abc.ABCMeta):
+            if not word in WITHOUT_CALLABLE_POSTFIX:
+                word += '('
         return word
 
     def _private_filter(self, text, matches):
