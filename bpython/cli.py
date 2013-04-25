@@ -1075,22 +1075,22 @@ class Editable(object):
             if self.config.is_space_only_skip_char:
                 while pos >= 0 and self.s[pos] == ' ':
                     deleted.append(self.s[pos])
-                    pos -= self.backward_delete_character()
+                    pos -= Editable.backward_delete_character(self)
                     # Then we delete a full word.
                 if pos >= 0 and self.s[pos] in self.word_delimiter:
                     deleted.append(self.s[pos])
-                    pos -= self.backward_delete_character()
+                    pos -= Editable.backward_delete_character(self)
                 while pos >= 0 and self.s[pos] == ' ':
                     deleted.append(self.s[pos])
-                    pos -= self.backward_delete_character()
+                    pos -= Editable.backward_delete_character(self)
                     # Then we delete a full word.
             else:
                 while pos >= 0 and self.s[pos] in self.word_delimiter:
                     deleted.append(self.s[pos])
-                    pos -= self.backward_delete_character()
+                    pos -= Editable.backward_delete_character(self)
             while pos >= 0 and self.s[pos] not in self.word_delimiter:
                 deleted.append(self.s[pos])
-                pos -= self.backward_delete_character()
+                pos -= Editable.backward_delete_character(self)
             self.cut_buffer.append(''.join(reversed(deleted)))
 
     def kill_line(self):
@@ -1170,7 +1170,6 @@ class CLIRepl(repl.Repl, Editable):
         self.interp.writetb = self.writetb
         self.exit_value = ()
         self.f_string = ''
-        self.skip_completion = False
         self.in_hist = False
         self.in_search_mode = None
         self.rl_indices = []
@@ -1211,9 +1210,7 @@ class CLIRepl(repl.Repl, Editable):
         return result
 
     def backward_kill_word(self):
-        self.skip_completion = True
         Editable.backward_kill_word(self)
-        self.skip_completion = False
         self.complete()
 
     def backward_kill_line(self):
@@ -1243,8 +1240,6 @@ class CLIRepl(repl.Repl, Editable):
 
     def complete(self, tab=False):
         """Get Autcomplete list and window."""
-        if self.skip_completion:
-            return
         if self.in_search_mode == "search":
             self.search_history()
         elif self.in_search_mode == "reverse":

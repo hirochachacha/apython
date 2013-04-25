@@ -61,7 +61,10 @@ class BPythonCompleter(rlcompleter.Completer):
         self.matches = file_completer.complete(text)
 
     def get_item_complete(self, expr, attr):
-        self.matches = get_item_completer.complete(expr, attr, self.locals)
+        try:
+            self.matches = get_item_completer.complete(expr, attr, self.locals)
+        except TimeOutException:
+            self.matches = []
 
     def import_complete(self, text, line):
         self.matches = import_completer.complete(text, line)
