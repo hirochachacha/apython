@@ -524,7 +524,7 @@ class ListBox(object):
             elif not PY3 and isinstance(obj, long):
                 val = str(obj)
             elif isinstance(obj, str):
-                val = '"' + obj + '"'
+                val = '"' + obj.replace('\x00', '\\x00', -1) + '"'
             elif not PY3 and isinstance(obj, unicode):
                 val = 'u"' + obj + '"'
             elif isinstance(obj, Dummy):
