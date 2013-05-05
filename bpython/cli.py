@@ -511,26 +511,7 @@ class ListBox(object):
 
             self.addstr('\n  ')
 
-            if inspect.isclass(obj):
-                class_name = 'class'
-            elif hasattr(obj, '__class__') and hasattr(obj.__class__, '__name__'):
-                class_name = obj.__class__.__name__
-            else:
-                class_name = 'unknown'
-
-            val = ""
-            if isinstance(obj, (int, float, complex, list, dict, set, tuple)):
-                val = str(obj)
-            elif not PY3 and isinstance(obj, long):
-                val = str(obj)
-            elif isinstance(obj, str):
-                val = '"' + obj.replace('\x00', '\\x00', -1) + '"'
-            elif not PY3 and isinstance(obj, unicode):
-                val = 'u"' + obj + '"'
-            elif isinstance(obj, Dummy):
-                class_name = obj.class_name
-            elif obj is None:
-                return r
+            val = repr(obj)
 
             self.addstr(obj_name, app.get_colpair('name') | curses.A_BOLD)
             if val:
@@ -539,9 +520,6 @@ class ListBox(object):
                 self.addstr(' = ', app.get_colpair('string'))
                 self.addstr(val, app.get_colpair('keyword'))
                 self.docstring = ""
-            else:
-                self.addstr(': ', app.get_colpair('string'))
-                self.addstr(class_name, app.get_colpair('keyword'))
             return r
 
         elif isinstance(self.topline, inspection.NoSpec):

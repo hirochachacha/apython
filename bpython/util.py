@@ -41,7 +41,10 @@ def debug(s):
     bpython.running.clirepl.interact.notify(str(s))
 
 
-class Dummy(object): pass
+class Dummy(object):
+    def __repr__(self):
+        return self.repr
+
 
 
 def _dumps(obj):
@@ -49,6 +52,7 @@ def _dumps(obj):
         result = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
     except pickle.PicklingError:
         dummy = Dummy()
+        dummy.repr = repr(obj)
         dummy.class_name = obj.__class__.__name__
         dummy.__doc__ = obj.__doc__
         result = pickle.dumps(dummy, pickle.HIGHEST_PROTOCOL)
